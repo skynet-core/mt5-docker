@@ -19,6 +19,8 @@ for ((attempt=0; attempt<60; attempt++)); do
 	sleep 0.25
 done
 xdpyinfo >/dev/null
+# Keep bootstrap services alive while the Linux-side downloads are in progress.
+runuser -u plasma -- wineserver -p
 timeout 120 runuser -u plasma -- wine wineboot.exe --init
 runuser -u plasma -- wine reg add 'HKCU\Software\Wine' /v Version /d win10 /f
 runuser -u plasma -- wine reg add 'HKCU\Software\Wine\Drivers' /v Graphics /d x11 /f
@@ -28,18 +30,27 @@ curl --fail --location --retry 3 'https://go.microsoft.com/fwlink/?LinkId=212470
 curl --fail --location --retry 3 https://www.python.org/ftp/python/3.12.10/python-3.12.10-embed-amd64.zip -o /tmp/python.zip
 sha256sum /tmp/mt5setup.exe /tmp/webview2.exe /tmp/python.zip
 
-# Installers may leave their update processes alive; require the actual payload.
-set +e
-timeout 600 runuser -u plasma -- wine /tmp/webview2.exe /silent /install
-webview_status=$?
-set -e
-if [[ $webview_status != 0 && $webview_status != 124 ]]; then
-	printf 'WebView2 installer failed: %s\n' "$webview_status" >&2
-	exit 1
-fi
-webview=$(find "$WINEPREFIX/drive_c" -type f -iname msedgewebview2.exe -print -quit)
-[[ -n $webview ]] || { printf 'WebView2 runtime executable was not installed\n' >&2; exit 1; }
+# Start from a stopped service graph; RPC startup can fail in a cold Wine prefix.
 runuser -u plasma -- wineserver -k -w
+for attempt in 1 2; do
+	runuser -u plasma -- wineserver -p
+	set +e
+	timeout 600 runuser -u plasma -- wine /tmp/webview2.exe /silent /install
+	webview_status=$?
+	set -e
+	webview=$(find "$WINEPREFIX/drive_c" -type f -iname msedgewebview2.exe -size +0c -print -quit)
+	if [[ ($webview_status == 0 || $webview_status == 124) && -n $webview ]]; then break; fi
+	runuser -u plasma -- wineserver -k -w
+	if [[ $attempt == 2 ]]; then
+		printf 'WebView2 installation failed after two attempts (status %s, payload %s)\n' \
+			"$webview_status" "${webview:-missing}" >&2
+		exit 1
+	fi
+	printf 'WebView2 runtime unavailable; retrying with stopped Wine services\n' >&2
+done
+# Installers may leave update processes alive; stop them before the next installer.
+runuser -u plasma -- wineserver -k -w
+runuser -u plasma -- wineserver -p
 set +e
 timeout 600 runuser -u plasma -- wine /tmp/mt5setup.exe /auto '/path:C:\MT5'
 mt5_status=$?
@@ -80,6 +91,7 @@ if [[ $(wine --version) == wine-10.0* ]]; then
 	runuser -u plasma -- wine reg add 'HKCU\Software\Wine\AppDefaults\python.exe\DllOverrides' /v ucrtbase /d native,builtin /f
 	rm -rf /tmp/ucrt /tmp/ucrt-redist.exe
 fi
+runuser -u plasma -- wineserver -p
 timeout 120 runuser -u plasma -- wine 'C:\Python\python.exe' -c 'import MetaTrader5, mt5_mcp, matplotlib, fastmcp, win32api, pywintypes, pythoncom; from scipy.special import ndtr; assert ndtr(0) == 0.5; from mt5_mcp.mcp_server import create_mcp_server; create_mcp_server(); print("Windows MT5 MCP imports verified")'
 runuser -u plasma -- wineserver -k -w
 rm -rf "$WINEPREFIX/drive_c/Program Files (x86)/Microsoft/EdgeUpdate/Download" \
