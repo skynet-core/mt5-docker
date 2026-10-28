@@ -9,6 +9,7 @@ from validate import (
     display_profile,
     history_ready,
     kwin_version,
+    public_diagnostics,
     report_images,
     report_summary,
     tool_data,
@@ -16,6 +17,27 @@ from validate import (
 
 
 class EvidenceTests(unittest.TestCase):
+    def test_public_failure_diagnostics_exclude_credentials_and_mcp_responses(self):
+        private = "account=123456 password=private-password server=private-broker"
+        evidence = {
+            "case": "fedora-44-wayland-headless",
+            "passed": False,
+            "phase": "account_info",
+            "failure_type": "RuntimeError",
+            "error": private,
+            "calls": {"account_info": {"data": private}},
+            "password": "private-password",
+        }
+        self.assertEqual(
+            public_diagnostics(evidence),
+            {
+                "case": "fedora-44-wayland-headless",
+                "passed": False,
+                "phase": "account_info",
+                "failure_type": "RuntimeError",
+            },
+        )
+
     def test_running_kwin_version_is_read_from_support_information(self):
         self.assertEqual(
             kwin_version("Version\nKWin version: 6.8.2\nQt Version: 6.8.3"), "6.8.2"

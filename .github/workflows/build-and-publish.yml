@@ -227,6 +227,7 @@ jobs:
             artifacts/tested-image-id.txt
             artifacts/broker/*/chart.png
             artifacts/broker/*/summary.json
+            artifacts/broker/*/diagnostics.json
             !artifacts/display-matrix/**/parent/runtime/**
             !artifacts/display-matrix/**/parent/x11/**
             !artifacts/display-matrix/**/parent/Xauthority

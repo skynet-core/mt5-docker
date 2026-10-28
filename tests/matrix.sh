@@ -3,6 +3,13 @@
 set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 : "${MT5_ENV_FILE:?Set MT5_ENV_FILE to your private account environment file}"
+# Every mode shares one Wine volume, so its owner must not change for nested mode.
+matrix_uid=$(id -u)
+matrix_gid=$(id -g)
+[[ $matrix_uid != 0 ]] || matrix_uid=1000
+[[ $matrix_gid != 0 ]] || matrix_gid=1000
+export PLASMA_UID=${PLASMA_UID:-$matrix_uid}
+export PLASMA_GID=${PLASMA_GID:-$matrix_gid}
 run_id=$(date -u +%Y%m%dT%H%M%SZ)
 output=${OUTPUT_DIR:-$PWD/artifacts/matrix-$run_id}
 mkdir -p "$output"
@@ -42,6 +49,7 @@ for distro in "${distros[@]}"; do
 				MT5_MCP_PORT=0 MT5_NATIVE_MCP_PORT=0 MT5_EDITOR_MCP_PORT=0 \
 				VNC_PORT=0 WEB_PORT=0 VNC_PASSWORD=testpass \
 				bin/mt5-run -d >"$output/$case_name-start.log" 2>&1; then
+				printf 'Broker container failed to start: %s\n' "$case_name" >&2
 				failed=1
 				continue
 			fi
@@ -57,7 +65,13 @@ for distro in "${distros[@]}"; do
 			fi
 			if ! uv run --locked python tests/validate.py --container "$container" --case "$case_name" \
 				--url "http://127.0.0.1:$port/mcp" "${validation_args[@]}" --output "$output" \
-				>"$output/$case_name-validate.log" 2>&1; then failed=1; fi
+				>"$output/$case_name-validate.log" 2>&1; then
+				failed=1
+				printf 'Broker validation failed: %s\n' "$case_name" >&2
+				if [[ -f $output/$case_name/diagnostics.json ]]; then
+					cat -- "$output/$case_name/diagnostics.json" >&2
+				fi
+			fi
 			if [[ $mode == vnc || $mode == web ]]; then
 				capture_args=()
 				remote_port=5900

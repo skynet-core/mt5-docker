@@ -94,7 +94,8 @@ Validation artifacts are retained for 14 days. Display evidence is under
 or `on-x11/` for nested sessions. Every case retains screenshot, input proof,
 startup/container/service logs and metadata. `INDEX.md` and `index.json` reject
 incomplete or mismatched case sets. Broker artifacts include
-only chart PNGs and tester statistics; raw account responses, terminal logs and
+only chart PNGs, tester statistics and diagnostic phase/error-type records;
+raw account responses, terminal logs and
 application screenshots stay out of uploads. NVIDIA hardware tests remain a
 separate local check because standard runners provide no NVIDIA GPU.
 

@@ -60,6 +60,24 @@ def display_profile(session):
     }
 
 
+def public_diagnostics(evidence):
+    # Error strings and MCP responses can contain account data.
+    return {
+        key: evidence[key]
+        for key in (
+            "case",
+            "passed",
+            "phase",
+            "failure_type",
+            "image_id",
+            "display_backend",
+            "display_mode",
+            "kwin_version",
+        )
+        if key in evidence
+    }
+
+
 def history_ready(bars, start, end):
     return (
         isinstance(bars, list)
@@ -143,6 +161,7 @@ async def validate(args):
         "case": args.case,
         "container": args.container,
         "passed": False,
+        "phase": "startup",
         "calls": {},
     }
 
@@ -150,6 +169,13 @@ async def validate(args):
         (output / "results.json").write_text(
             json.dumps(evidence, indent=2, default=str)
         )
+        (output / "diagnostics.json").write_text(
+            json.dumps(public_diagnostics(evidence), indent=2) + "\n"
+        )
+
+    def checkpoint(phase):
+        evidence["phase"] = phase
+        save()
 
     def docker(*command, check=True, **kwargs):
         result = subprocess.run(
@@ -197,6 +223,7 @@ async def validate(args):
         )
 
     async def call(session, operation, **arguments):
+        checkpoint(operation)
         print(f"{args.case}: {operation}", flush=True)
         data = tool_data(
             await session.call_tool("mt5_query", {"operation": operation, **arguments})
@@ -207,6 +234,7 @@ async def validate(args):
         return data["data"]
 
     try:
+        checkpoint("image-and-compositor")
         evidence["image_id"] = (
             docker("inspect", "--format", "{{.Image}}", args.container)
             .stdout.decode()
@@ -270,6 +298,7 @@ async def validate(args):
                 "Wayland session did not use the installed KWin 6.8.2 overlay",
             )
 
+        checkpoint("account-configuration")
         program = "import configparser,json,sys; c=configparser.ConfigParser(interpolation=None); c.read(sys.argv[1],encoding='utf-16'); print(json.dumps({k:c.get('Common',k,fallback='') for k in ('Login','Server')}))"
         settings = json.loads(
             docker(
@@ -287,6 +316,7 @@ async def validate(args):
         )
         require(str(login).isdigit(), "MT5_LOGIN must be an account number")
 
+        checkpoint("mcp-initialize")
         async with (
             streamablehttp_client(args.url, timeout=timedelta(seconds=60)) as streams,
             ClientSession(
@@ -366,6 +396,7 @@ async def validate(args):
             ("tests/Screenshot.mq5", "Scripts"),
         ):
             stem = Path(source).stem
+            checkpoint(f"compile-{stem}")
             destination = f"{MT5}/MQL5/{folder}/{stem}"
             docker("exec", args.container, "mkdir", "-p", f"{MT5}/MQL5/{folder}")
             docker(
@@ -400,6 +431,7 @@ async def validate(args):
         evidence["compiled"] = True
 
         # Xwayland is rootless: capture MT5's window, rather than its empty root desktop.
+        checkpoint("application-screenshot")
         wine(
             r"C:\Python\python.exe",
             "-c",
@@ -422,12 +454,16 @@ async def validate(args):
         evidence["screenshot"] = "application.png"
 
         if args.native_url:
+            checkpoint("native-mcp")
             await inspect_native(args, evidence, save)
-        await backtest(args, docker, copy, wine, output, evidence)
+        await backtest(args, docker, copy, wine, output, evidence, checkpoint)
         evidence["passed"] = True
+        checkpoint("complete")
     except Exception as exc:
         evidence["error"] = str(exc)
+        evidence["failure_type"] = type(exc).__name__
         (output / "failure.log").write_text(traceback.format_exc())
+        save()
         raise
     finally:
         for filename, command in (
@@ -473,7 +509,8 @@ async def inspect_native(args, evidence, save):
         save()
 
 
-async def backtest(args, docker, copy, wine, output, evidence):
+async def backtest(args, docker, copy, wine, output, evidence, checkpoint):
+    checkpoint("tester-configuration")
     name = f"validation-{int(time.time())}"
     config = output / "tester.ini"
     config.write_text(
@@ -507,6 +544,7 @@ with os.fdopen(os.open(path, os.O_WRONLY | os.O_TRUNC), 'w', encoding='utf-16') 
     docker("exec", args.container, "systemctl", "stop", "mt5-mcp.service")
     docker("exec", args.container, "kill", "-STOP", supervisor)
     try:
+        checkpoint("tester-run")
         wine(r"C:\Python\python.exe", "-c", close)
         result = wine(
             r"C:\MT5\terminal64.exe",
@@ -530,6 +568,7 @@ with os.fdopen(os.open(path, os.O_WRONLY | os.O_TRUNC), 'w', encoding='utf-16') 
                 check=False,
             )
             docker("exec", args.container, "rm", "-f", f"{MT5}/{name}.ini", check=False)
+    checkpoint("tester-report")
     deadline = time.monotonic() + args.timeout
     while copy(f"{MT5}/{name}.htm", output / "report.htm", check=False).returncode:
         require(time.monotonic() < deadline, "Backtest produced no fresh HTML report")
@@ -552,6 +591,7 @@ with os.fdopen(os.open(path, os.O_WRONLY | os.O_TRUNC), 'w', encoding='utf-16') 
     (output / "summary.json").write_text(json.dumps(summary, indent=2))
     for image in report_images(html):
         copy(f"{MT5}/{image}", output / image)
+    checkpoint("chart-screenshot")
     copy(f"{MT5}/MQL5/Files/validation-chart.png", output / "chart.png")
     with Image.open(output / "chart.png") as image:
         require(chart_has_content(image), "Chart screenshot is blank")
