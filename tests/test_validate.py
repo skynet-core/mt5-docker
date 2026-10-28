@@ -1,6 +1,9 @@
 """Small checks for validation's evidence parsers."""
 
+import subprocess
 import unittest
+from types import SimpleNamespace
+from unittest.mock import Mock
 
 from PIL import Image, ImageDraw
 from validate import (
@@ -9,6 +12,7 @@ from validate import (
     display_profile,
     history_ready,
     kwin_version,
+    mcp_state,
     public_diagnostics,
     report_images,
     report_summary,
@@ -17,6 +21,40 @@ from validate import (
 
 
 class EvidenceTests(unittest.TestCase):
+    def test_mcp_state_keeps_only_safe_unit_properties_and_listener_boolean(self):
+        docker = Mock(
+            side_effect=[
+                SimpleNamespace(
+                    returncode=0,
+                    stdout=(
+                        b"ActiveState=active\nSubState=running\nNRestarts=2\nExecMainStatus=1\n"
+                        b"ExecStart=private-password\nStatusText=account-123456-server-private\n"
+                    ),
+                ),
+                SimpleNamespace(returncode=0, stdout=b"True\n"),
+            ]
+        )
+        self.assertEqual(
+            mcp_state(docker, "test-container"),
+            {
+                "ActiveState": "active",
+                "SubState": "running",
+                "NRestarts": 2,
+                "ExecMainStatus": 1,
+                "tcp_listening": True,
+            },
+        )
+        for call in docker.call_args_list:
+            self.assertEqual(call.kwargs["timeout"], 2)
+            self.assertFalse(call.kwargs["check"])
+        program = docker.call_args_list[-1].args[-1]
+        compile(program, "mcp-listener-probe", "exec")
+
+    def test_unavailable_mcp_state_cannot_hide_the_original_validation_error(self):
+        docker = Mock(side_effect=subprocess.TimeoutExpired(["private-password"], 2))
+        self.assertEqual(mcp_state(docker, "test-container"), {})
+        self.assertEqual(docker.call_count, 2)
+
     def test_public_failure_diagnostics_exclude_credentials_and_mcp_responses(self):
         private = "account=123456 password=private-password server=private-broker"
         evidence = {

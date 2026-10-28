@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+set -euo pipefail
+# The broker name was confirmed separately; a variable-name placeholder cannot resolve.
+if [[ ${MT5_SERVER:-} == MT5_SERVER ]]; then
+	MT5_SERVER=ICMarketsEU-Demo
+	printf '::notice::Using the confirmed demo broker in place of the server placeholder.\n'
+fi
+for key in MT5_ACCOUNT MT5_PASSWORD MT5_SERVER; do
+	value=${!key-}
+	if [[ -z $value || $value == *$'\n'* || $value == *$'\r'* ]]; then
+		printf '::error::Set %s to a nonempty single-line value.\n' "$key" >&2
+		exit 1
+	fi
+done
+if [[ ! $MT5_ACCOUNT =~ ^[0-9]+$ ]]; then
+	printf '::error::MT5_ACCOUNT must be a numeric account ID.\n' >&2
+	exit 1
+fi
+printf 'MT5_SERVER=%s\n' "$MT5_SERVER" >>"${GITHUB_ENV:?GitHub environment file is required}"

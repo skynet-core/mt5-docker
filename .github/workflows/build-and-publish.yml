@@ -95,12 +95,7 @@ jobs:
           MT5_PASSWORD: ${{ secrets.MT5_PASSWORD }}
           MT5_SERVER: ${{ secrets.MT5_SERVER }}
         run: |
-          for key in MT5_ACCOUNT MT5_PASSWORD MT5_SERVER; do
-            if [[ -z ${!key} ]]; then
-              echo "::error::Set the $key repository secret before publishing."
-              exit 1
-            fi
-          done
+          build/ci-broker-env
 
       - name: Prepare standard runner
         run: |
@@ -183,7 +178,6 @@ jobs:
         env:
           MT5_ACCOUNT: ${{ secrets.MT5_ACCOUNT }}
           MT5_PASSWORD: ${{ secrets.MT5_PASSWORD }}
-          MT5_SERVER: ${{ secrets.MT5_SERVER }}
           MT5_ENV_FILE: /dev/null
           HOST_DISPLAY_BACKEND: x11
           OUTPUT_DIR: ${{ github.workspace }}/artifacts/broker

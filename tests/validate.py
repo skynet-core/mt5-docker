@@ -2,6 +2,7 @@
 
 import argparse
 import asyncio
+import contextlib
 import json
 import os
 import re
@@ -73,9 +74,47 @@ def public_diagnostics(evidence):
             "display_backend",
             "display_mode",
             "kwin_version",
+            "mcp_state",
         )
         if key in evidence
     }
+
+
+def mcp_state(docker, container):
+    """Collect bounded public state without journals, arguments or RPC calls."""
+    result = {}
+    with contextlib.suppress(OSError, subprocess.SubprocessError):
+        status = docker(
+            "exec",
+            container,
+            "systemctl",
+            "show",
+            "mt5-mcp.service",
+            "--property=ActiveState,SubState,NRestarts,ExecMainStatus",
+            timeout=2,
+            check=False,
+        )
+        if status.returncode == 0:
+            for line in status.stdout.decode(errors="replace").splitlines():
+                key, _, value = line.partition("=")
+                if key in ("ActiveState", "SubState") and re.fullmatch(
+                    r"[a-z-]+", value
+                ):
+                    result[key] = value
+                elif key in ("NRestarts", "ExecMainStatus") and value.isdecimal():
+                    result[key] = int(value)
+    program = """from pathlib import Path
+print(any(line.split()[1].rsplit(':', 1)[1] == '1F40' and line.split()[3] == '0A'
+          for name in ('/proc/net/tcp', '/proc/net/tcp6')
+          if Path(name).exists() for line in Path(name).read_text().splitlines()[1:]))
+"""
+    with contextlib.suppress(OSError, subprocess.SubprocessError):
+        sockets = docker(
+            "exec", container, "python3", "-c", program, timeout=2, check=False
+        )
+        if sockets.returncode == 0 and sockets.stdout.strip() in (b"True", b"False"):
+            result["tcp_listening"] = sockets.stdout.strip() == b"True"
+    return result
 
 
 def history_ready(bars, start, end):
@@ -466,6 +505,8 @@ async def validate(args):
         save()
         raise
     finally:
+        evidence["mcp_state"] = mcp_state(docker, args.container)
+        save()
         for filename, command in (
             ("container.log", ("logs", args.container)),
             (

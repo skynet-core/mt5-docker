@@ -69,6 +69,9 @@ Set these repository Actions secrets to a dedicated demo account:
 
 Missing secrets fail publication before the expensive build. PRs and ordinary
 branch pushes never receive broker credentials or publish application images.
+The preflight rejects malformed account IDs and multiline settings. If the
+server secret contains the literal placeholder `MT5_SERVER`, it uses the
+confirmed `ICMarketsEU-Demo` broker name.
 For a manual build without broker secrets, choose **Run workflow** and disable
 `publish`; the installation and compositor tests still run.
 
