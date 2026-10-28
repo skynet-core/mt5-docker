@@ -25,7 +25,8 @@ for distro in "${distros[@]}"; do
 done
 scratch=$(mktemp -d)
 fixture_container=''
-# shellcheck disable=SC2329
+# Called indirectly by the EXIT trap; diagnostic differs across ShellCheck versions.
+# shellcheck disable=SC2317,SC2329
 cleanup() {
 	if [[ -n $fixture_container ]]; then docker rm -fv "$fixture_container" >/dev/null 2>&1 || true; fi
 	rm -rf -- "$scratch"

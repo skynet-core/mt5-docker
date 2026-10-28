@@ -70,6 +70,7 @@ The image installs the dependencies needed for query and technical-analysis tool
 ```sh
 uv sync --locked
 uv run --locked python -m unittest discover -s tests -v
+uv run --locked python build/lint.py
 uv run --locked python tests/validate.py --container mt5 --case fedora-wayland-headless
 MT5_ENV_FILE="$PWD/.env" tests/matrix.sh
 ```

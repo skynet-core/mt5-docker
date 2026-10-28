@@ -27,7 +27,7 @@ if [[ -n ${TARGET_APP:-} ]]; then
 		/usr/local/libexec/plasma-wait x11
 		pids=()
 		# Invoked by the EXIT trap when either process terminates.
-		# shellcheck disable=SC2329
+		# shellcheck disable=SC2317,SC2329
 		cleanup() {
 			kill "${pids[@]}" 2>/dev/null || true
 			wait "${pids[@]}" 2>/dev/null || true

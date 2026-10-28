@@ -84,7 +84,7 @@ def screenshot(client, path):
         marker = sum(
             count
             for count, pixel in colors
-            if max(abs(a - b) for a, b in zip(pixel, (18, 210, 178))) < 15
+            if max(abs(a - b) for a, b in zip(pixel, (18, 210, 178), strict=True)) < 15
         )
         image.save(path)
         if marker > 50:

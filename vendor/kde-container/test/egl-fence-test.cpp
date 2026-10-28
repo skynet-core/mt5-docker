@@ -15,7 +15,8 @@ int main(int argc, char **argv) {
   assert(library);
   const char *preload = std::getenv("LD_PRELOAD");
   assert(preload && std::strcmp(preload, "caller-preload.so") == 0);
-  assert(!std::getenv("PLASMA_KWIN_ORIGINAL_LD_PRELOAD"));
+  const char *originalPreload = std::getenv("PLASMA_KWIN_ORIGINAL_LD_PRELOAD");
+  assert(!originalPreload);
   using Duplicate = int (*)(void *, void *);
   auto symbol = static_cast<Duplicate *>(
       dlsym(library, "epoxy_eglDupNativeFenceFDANDROID"));

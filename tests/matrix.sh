@@ -21,7 +21,8 @@ stop_container() {
 		sleep 0.1
 	done
 }
-# shellcheck disable=SC2329
+# Called indirectly by the EXIT trap; diagnostic differs across ShellCheck versions.
+# shellcheck disable=SC2317,SC2329
 cleanup() {
 	if [[ -n $container ]]; then stop_container || true; fi
 	if [[ -n $volume ]]; then docker volume rm "$volume" >/dev/null 2>&1 || true; fi

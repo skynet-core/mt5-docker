@@ -6,14 +6,22 @@ dependencies = []
 
 [dependency-groups]
 dev = [
+    "cppcheck==1.5.3",
     "mcp>=1.26,<2",
     "mt5-mcp==0.6.3",
     "pillow>=11,<13",
     "pycryptodome>=3.20,<4",
     "python-dotenv==1.2.4",
     "ruff==0.17.3",
+    "shellcheck-py==0.11.0.1",
     "websocket-client>=1.8,<2",
 ]
 
 [tool.uv]
 package = false
+
+[tool.ruff]
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I", "B", "UP"]

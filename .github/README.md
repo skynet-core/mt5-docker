@@ -6,7 +6,7 @@
 ## Checks and image tests
 
 Every push and pull request runs locked `uv` dependency installation, unit tests,
-Ruff, Shellcheck, Dockerfile generation checks and actionlint. A four-image matrix
+Ruff, ShellCheck, Cppcheck, Dockerfile generation checks and actionlint. A four-image matrix
 then builds the production image and runs:
 
 1. An installation smoke test: Wine/WebView2/MT5 payloads, Windows Python
@@ -20,6 +20,18 @@ then builds the production image and runs:
    verify the saved file. Nested cases also exchange text and PNG clipboard data.
    Tests reproduce delayed capture startup where PipeWire is used; X11 capture
    records that phase as inapplicable and still verifies authenticated frames.
+
+Run the same source linters locally with:
+
+```sh
+uv sync --locked
+uv run --locked python build/lint.py
+```
+
+Ruff, ShellCheck and Cppcheck versions are locked as development dependencies.
+The command lists every checked file, including vendored code, extensionless
+scripts and new unignored files. Generated artifacts and virtual environments
+are excluded through Git's ignore rules. Any linter finding fails the checks job.
 
 The matching Qt fixture is exported from the `runtime-test` target and mounted
 read-only during compositor tests. Its test-only screenshot permission entry is

@@ -104,9 +104,11 @@ class Probe:
         while time.monotonic() < deadline:
             try:
                 message = self.messages.get(timeout=0.25)
-            except queue.Empty:
+            except queue.Empty as error:
                 if self.process.poll() is not None:
-                    raise RuntimeError("Clipboard probe exited; inspect its log")
+                    raise RuntimeError(
+                        "Clipboard probe exited; inspect its log"
+                    ) from error
                 continue
             if isinstance(message, Exception):
                 raise message
