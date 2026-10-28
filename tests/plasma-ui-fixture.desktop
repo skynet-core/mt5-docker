@@ -1,0 +1,6 @@
+[Desktop Entry]
+Type=Application
+Name=Container display test fixture
+Exec=/usr/local/bin/plasma-ui-fixture
+NoDisplay=true
+X-KDE-DBUS-Restricted-Interfaces=org.kde.KWin.ScreenShot2

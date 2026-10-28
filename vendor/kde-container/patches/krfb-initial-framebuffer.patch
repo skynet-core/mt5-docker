@@ -1,0 +1,22 @@
+--- a/framebuffers/pipewire/pw_framebuffer.cpp
++++ b/framebuffers/pipewire/pw_framebuffer.cpp
+@@ -380,7 +380,7 @@
+     }
+ 
+     free(q->fb);
+-    q->fb = static_cast<char *>(malloc(size.width() * size.height() * BYTES_PER_PIXEL));
++    q->fb = static_cast<char *>(calloc(size.width() * size.height(), BYTES_PER_PIXEL));
+     if (!q->fb) {
+         qCWarning(KRFB_FB_PIPEWIRE) << "Failed to allocate buffer";
+         isValid = false;
+@@ -431,7 +431,9 @@
+ 
+ void PWFrameBuffer::startVirtualMonitor(const QString &name, const QSize &resolution, qreal dpr)
+ {
+-    d->videoSize = resolution * dpr;
++    // VNC clients can request pixels before PipeWire delivers its first frame.
++    // Publish dimensions only with an allocated, initialized framebuffer.
++    d->setVideoSize(resolution * dpr);
+     using namespace KWayland::Client;
+     auto connection = ConnectionThread::fromApplication(this);
+     if (!connection) {

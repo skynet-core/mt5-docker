@@ -1,0 +1,31 @@
+Source: https://github.com/skynet-core/kde-container
+Commit: 782714fb841737b884ea263ada5108ae3754be85
+Verified: 2026-10-28
+
+Vendored runtime, compositor input and clipboard sources, KRFB patches, and GPU
+compatibility sources. Existing source copyright and license notices are retained.
+The test-only RFB client in ../../tests/rfb.py is copied from the same source commit.
+
+Local changes:
+- X11 kiosk sessions require kwin_x11, without requiring startplasma-x11.
+- Kiosk Qt clients use the generic theme, avoiding Qt 6.11's built-in KDE theme
+  startup crash when the optional Plasma integration package is absent.
+- Restart the compositor after successful exits too: KWin's wrapper returns zero
+  when it exhausts its crash retries. Explicit systemd stops still stop it.
+- Debian and Ubuntu source variants use the isolated /opt/kwin-6.8.2 stack. Its
+  Qt/KF paths and service cache are scoped to KWin and its matching KScreen
+  output client; distro applications retain their original library/plugin
+  environment. KWin 6.8 changed the output-device registry protocol.
+- Allocate and initialize KRFB's virtual-monitor framebuffer before publishing
+  its dimensions. An early VNC pixel request otherwise dereferences null before
+  PipeWire delivers the first captured frame.
+- Debian KWin 6.3 NVIDIA VNC/web sessions use the software-capture workaround
+  only when the optional /opt/kwin-6.8.2 compositor is absent. Source KWin 6.8.2
+  retains the normal GPU path in every mode.
+- Arch builds the separately namespaced upstream KWin X11 release because its
+  current repositories no longer publish kwin-x11.
+- Forced Wayland nesting also mounts the host X11 socket when clipboard sync is
+  enabled, allowing the Weston clipboard bridge to use its Xwayland fallback.
+- The test-only GUI fixture can capture actual headless outputs through KWin's
+  ScreenShot2 API or the X11 root screen. Its Save button has a solid color so
+  input tests can locate and click the rendered control across nested displays.

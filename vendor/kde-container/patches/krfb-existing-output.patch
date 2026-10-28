@@ -1,0 +1,83 @@
+--- a/framebuffers/pipewire/screencasting.h
++++ b/framebuffers/pipewire/screencasting.h
+@@ -12,6 +12,7 @@
+ #include <optional>
+ 
+ struct zkde_screencast_unstable_v1;
++struct wl_output;
+ 
+ namespace KWayland
+ {
+@@ -66,6 +67,8 @@
+ 
+     ScreencastingStream *createVirtualMonitorStream(const QString &name, const QSize &resolution, qreal dpr, CursorMode mode);
+ 
++    ScreencastingStream *createOutputStream(wl_output *output, CursorMode mode);
++
+     void setup(zkde_screencast_unstable_v1 *screencasting);
+     void destroy();
+ 
+--- a/framebuffers/pipewire/screencasting.cpp
++++ b/framebuffers/pipewire/screencasting.cpp
+@@ -106,6 +106,13 @@
+     return stream;
+ }
+ 
++ScreencastingStream *Screencasting::createOutputStream(wl_output *output, CursorMode mode)
++{
++    auto stream = new ScreencastingStream(this);
++    stream->d->init(d->stream_output(output, mode));
++    return stream;
++}
++
+ void Screencasting::setup(::zkde_screencast_unstable_v1 *screencasting)
+ {
+     d.reset(new ScreencastingPrivate(screencasting, this));
+--- a/framebuffers/pipewire/pw_framebuffer.cpp
++++ b/framebuffers/pipewire/pw_framebuffer.cpp
+@@ -24,6 +24,7 @@
+ 
+ #include <KWayland/Client/connection_thread.h>
+ #include <KWayland/Client/registry.h>
++#include <KWayland/Client/output.h>
+ 
+ // pipewire
+ #include <climits>
+@@ -451,10 +452,33 @@
+         }
+ 
+         auto screencasting = new Screencasting(registry, wlname, std::min(version, 5u), this);
+-        auto r = screencasting->createVirtualMonitorStream(name, resolution, dpr, Screencasting::Metadata);
+-        connect(r, &ScreencastingStream::created, this, [this](quint32 nodeId) {
+-            d->stream->createStream(nodeId, 0);
+-        });
++        if (qEnvironmentVariableIntValue("PLASMA_VNC_EXISTING_OUTPUT") == 1) {
++            // KWin 6.3's virtual backend cannot create a second output. Capture
++            // its existing GPU-rendered monitor through the same PipeWire path.
++            connect(registry, &Registry::interfacesAnnounced, this, [this, registry, screencasting] {
++                const auto outputs = registry->interfaces(Registry::Interface::Output);
++                if (outputs.isEmpty()) {
++                    qWarning() << "No existing Wayland output is available";
++                    QCoreApplication::exit(1);
++                    return;
++                }
++                const auto info = outputs.first();
++                auto output = registry->createOutput(info.name, info.version, this);
++                auto r = screencasting->createOutputStream(*output, Screencasting::Metadata);
++                connect(r, &ScreencastingStream::created, this, [this](quint32 nodeId) {
++                    d->stream->createStream(nodeId, 0);
++                });
++                connect(r, &ScreencastingStream::failed, this, [](const QString &error) {
++                    qWarning() << "Existing-output capture failed:" << error;
++                    QCoreApplication::exit(1);
++                });
++            });
++        } else {
++            auto r = screencasting->createVirtualMonitorStream(name, resolution, dpr, Screencasting::Metadata);
++            connect(r, &ScreencastingStream::created, this, [this](quint32 nodeId) {
++                d->stream->createStream(nodeId, 0);
++            });
++        }
+     });
+     registry->create(connection);
+     registry->setup();

@@ -1,0 +1,19 @@
+#!/usr/bin/bash
+# KWin supplies DISPLAY, including Xwayland in a Wayland session.
+set -euo pipefail
+export WINEPREFIX=/home/plasma/.wine WINEDEBUG=-all
+export WINEDLLOVERRIDES='mscoree,mshtml='
+export WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS='--disable-gpu'
+python3 - <<'PYTHON'
+import json
+import os
+
+keys = ("DISPLAY", "XAUTHORITY", "WAYLAND_DISPLAY", "XDG_RUNTIME_DIR",
+        "DBUS_SESSION_BUS_ADDRESS", "WINEPREFIX", "WINEDEBUG", "WINEDLLOVERRIDES")
+path = "/run/plasma/mt5-environment.json"
+descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+with os.fdopen(descriptor, "w") as stream:
+    json.dump({key: os.environ[key] for key in keys if key in os.environ}, stream)
+PYTHON
+exec wine 'C:\MT5\terminal64.exe' /portable '/config:C:\MT5\config.ini'
+

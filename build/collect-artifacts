@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+set -euo pipefail
+plugins="$(pkg-config --variable=libdir Qt6Core)/qt6/plugins"
+case ${1:?input or vnc required} in
+input)
+	install -Dm755 /build/plasma-clipboard /out/root/usr/local/libexec/plasma-clipboard
+	install -Dm755 /build/kwin.so "/out/root$plugins/krfb/events/kwin.so"
+	;;
+vnc)
+	install -Dm755 /krfb-build/bin/krfb-virtualmonitor /out/root/usr/bin/krfb-virtualmonitor
+	install -Dm755 /krfb-build/bin/pw.so "/out/root$plugins/krfb/framebuffer/pw.so"
+	;;
+*) exit 2 ;;
+esac

@@ -1,0 +1,51 @@
+#!/usr/bin/python3
+"""Check the selected target, desktop bus name and enabled transports."""
+
+import os
+import pwd
+import shlex
+import subprocess
+
+environment = os.environ.copy()
+with open("/etc/plasma/session.env") as config:
+    for line in config:
+        key, value = shlex.split(line)[0].split("=", 1)
+        environment[key] = value
+environment["PLASMA_WAIT_TIMEOUT"] = "0"
+account = pwd.getpwnam("plasma")
+
+
+def desktop_probe(command):
+    # PAM-enabled runuser can replace the private bus/runtime with a login user's
+    # /run/user/<uid> session (notably on Arch). Drop IDs directly and preserve the
+    # exact service environment, including supplementary render-device groups.
+    subprocess.run(
+        command,
+        env=environment,
+        check=True,
+        user=account.pw_uid,
+        group=account.pw_gid,
+        extra_groups=os.getgrouplist(account.pw_name, account.pw_gid),
+    )
+
+
+units = [
+    f"plasma-{environment['DISPLAY_BACKEND']}-{environment['DISPLAY_MODE']}.target",
+    "plasma-session.service",
+]
+probes = ["desktop"]
+if environment["DISPLAY_MODE"] == "nested" and environment.get("CLIPBOARD_SYNC") == "1":
+    units.append("plasma-clipboard.service")
+if environment["DISPLAY_MODE"] in ("vnc", "web"):
+    units.append("plasma-vnc.service")
+    probes.append("vnc")
+if environment["DISPLAY_MODE"] == "web":
+    units.append("plasma-web.service")
+    probes.append("web")
+for unit in units:
+    # is-active with multiple units succeeds when any one of them is active.
+    subprocess.run(["systemctl", "is-active", "--quiet", unit], check=True)
+if environment["DISPLAY_MODE"] in ("vnc", "web"):
+    desktop_probe(["/usr/local/libexec/plasma-remote-output", "--check"])
+for probe in probes:
+    desktop_probe(["/usr/local/libexec/plasma-wait", probe])

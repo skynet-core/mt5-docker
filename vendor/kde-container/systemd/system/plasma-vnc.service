@@ -1,0 +1,16 @@
+[Unit]
+Description=VNC access to the Plasma desktop
+Requires=plasma-session.service
+After=plasma-session.service plasma-pipewire.service plasma-wireplumber.service
+
+[Service]
+Type=exec
+User=plasma
+EnvironmentFile=/etc/plasma/session.env
+# On Wayland krfb must create an output before plasmashell can become ready.
+ExecStartPre=/usr/local/libexec/plasma-wait ${DISPLAY_BACKEND}
+ExecStart=/usr/local/libexec/plasma-vnc
+ExecStartPost=/usr/local/libexec/plasma-remote-output
+Restart=on-failure
+RestartSec=3
+TimeoutStartSec=75

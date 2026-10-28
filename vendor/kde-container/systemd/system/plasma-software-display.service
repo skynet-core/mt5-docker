@@ -1,0 +1,14 @@
+[Unit]
+Description=Private display for Wayland VNC software rendering
+Requires=plasma-dbus.service
+After=plasma-dbus.service
+Before=plasma-session.service
+
+[Service]
+Type=exec
+User=plasma
+EnvironmentFile=/etc/plasma/session.env
+ExecCondition=/usr/bin/test ${PLASMA_SOFTWARE_CAPTURE} = 1
+ExecStart=/usr/local/libexec/plasma-software-display
+Restart=on-failure
+RestartSec=3

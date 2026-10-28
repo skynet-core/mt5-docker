@@ -1,0 +1,6 @@
+[Unit]
+Description=Proxy native MCP on loopback port %i
+
+[Service]
+User=plasma
+ExecStart=/usr/lib/systemd/systemd-socket-proxyd 127.0.0.1:%i

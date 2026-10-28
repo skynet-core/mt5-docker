@@ -1,0 +1,2 @@
+libepoxy-dev
+libqaccessibilityclient-qt6-dev

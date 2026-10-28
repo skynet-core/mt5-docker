@@ -1,0 +1,6 @@
+[Unit]
+Description=Plasma 6 wayland vnc desktop
+Requires=multi-user.target plasma-session.service plasma-vnc.service plasma-pipewire.service plasma-wireplumber.service
+Requires=plasma-software-display.service
+After=multi-user.target plasma-session.service plasma-vnc.service plasma-pipewire.service plasma-wireplumber.service
+AllowIsolate=yes

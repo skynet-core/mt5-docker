@@ -1,0 +1,3 @@
+[General]
+# Container system services supervise the session and compositor.
+systemdBoot=false

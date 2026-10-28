@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+# An isolated compositor stack keeps distro Qt/KRFB clients on their own ABI.
+set -euo pipefail
+prefix=/opt/kwin-6.8.2
+export PATH="$prefix/bin:$PATH"
+export LD_LIBRARY_PATH="$prefix/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+export CMAKE_PREFIX_PATH="$prefix"
+export PKG_CONFIG_PATH="$prefix/lib/pkgconfig:$prefix/share/pkgconfig"
+export QT_QPA_PLATFORM=offscreen
+export QT_QPA_PLATFORMTHEME=generic
+
+source_dir() {
+	local name=$1 url checksum
+	read -r url checksum < <(awk -F '\t' -v name="$name" '$1 == name {print $2, $3}' /build-support/kwin-6.8.2-sources.tsv)
+	[[ -n $url && $checksum =~ ^[0-9a-f]{64}$ ]]
+	mkdir -p "/work/$name/source"
+	curl --fail --location --retry 3 "$url" --output "/work/$name/source.tar"
+	printf '%s  %s\n' "$checksum" "/work/$name/source.tar" | sha256sum --check -
+	tar -xf "/work/$name/source.tar" --strip-components=1 -C "/work/$name/source"
+	if [[ -d /work/$name/source/LICENSES ]]; then
+		install -d "$prefix/share/licenses/$name"
+		cp -a "/work/$name/source/LICENSES/." "$prefix/share/licenses/$name/"
+	fi
+}
+
+build_cmake() {
+	local name=$1
+	shift
+	source_dir "$name"
+	cmake -S "/work/$name/source" -B "/work/$name/build" -G Ninja \
+		-DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$prefix" \
+		-DCMAKE_INSTALL_LIBDIR=lib -DCMAKE_INSTALL_RPATH="$prefix/lib" \
+		-DCMAKE_BUILD_RPATH="$prefix/lib" "$@"
+	cmake --build "/work/$name/build" --parallel 16
+	cmake --install "/work/$name/build" --strip
+	rm -rf "/work/$name"
+}
+
+build_qt() {
+	build_cmake "$1" -DQT_BUILD_TESTS=OFF -DQT_BUILD_EXAMPLES=OFF \
+		-DINSTALL_LIBDIR=lib -DINSTALL_PLUGINSDIR=plugins -DINSTALL_QMLDIR=qml "${@:2}"
+}
+
+build_kde() {
+	build_cmake "$1" -DBUILD_TESTING=OFF -DBUILD_QCH=OFF \
+		-DBUILD_PYTHON_BINDINGS=OFF -DKDE_INSTALL_LIBDIR=lib \
+		-DKDE_INSTALL_QTPLUGINDIR=plugins -DKDE_INSTALL_QMLDIR=qml \
+		-DCMAKE_DISABLE_FIND_PACKAGE_KF6DocTools=ON "${@:2}"
+}
+
+phase=${1:?build phase required}
+case $phase in platform | qtbase | qtdeclarative | qtmodules | frameworks | kwin | collect) ;; *) exit 2 ;; esac
+# shellcheck source=/dev/null
+source "/build-support/kwin-phase-$phase.sh"

@@ -1,0 +1,13 @@
+#!/usr/bin/bash
+set -euo pipefail
+[[ -n $HOST_DISPLAY ]] || exit 0
+number=${HOST_DISPLAY#:}
+socket=/tmp/.X11-unix/X$number
+install -d -m 1777 /tmp/.X11-unix
+# tmpfiles clears X11 sockets and locks at boot. Create aliases after it runs.
+if [[ ! -e $socket && -S /run/host/X11/X$number ]]; then
+	ln -s "/run/host/X11/X$number" "$socket"
+fi
+# Keep KDE's Xwayland wrapper from claiming the host display number.
+printf '%10d\n' 1 >"/tmp/.X$number-lock"
+chmod 644 "/tmp/.X$number-lock"

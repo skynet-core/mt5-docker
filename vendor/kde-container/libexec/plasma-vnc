@@ -1,0 +1,23 @@
+#!/usr/bin/bash
+set -euo pipefail
+extra=()
+if [[ $DISPLAY_BACKEND == wayland && ${PLASMA_SOFTWARE_CAPTURE:-0} != 1 ]]; then
+	export PLASMA_KWIN_INPUT=1
+	# Virtualmonitor requires no interactive portal approval.
+	exec /usr/bin/krfb-virtualmonitor --name Plasma \
+		--resolution "${DISPLAY_WIDTH}x${DISPLAY_HEIGHT}" --port 5900 \
+		--password "$(cat /etc/plasma/vnc-password)"
+fi
+if [[ ${PLASMA_SOFTWARE_CAPTURE:-0} == 1 ]]; then
+	export DISPLAY=$PLASMA_SOFTWARE_DISPLAY XAUTHORITY=/etc/plasma/Xauthority
+	# x11vnc captures the private parent X server, not the inner Wayland socket.
+	export XDG_SESSION_TYPE=x11
+	unset WAYLAND_DISPLAY
+	# Preserve actual Shift/Ctrl transitions for KWin's nested input backend.
+	# XKB modifier-state rewrites do not generate the key events it consumes.
+	extra+=(-nomodtweak -noxkb)
+	export LD_PRELOAD=/usr/local/lib/plasma6/xtest-paced.so
+fi
+exec /usr/bin/x11vnc -display "$DISPLAY" -auth "$XAUTHORITY" \
+	-rfbauth /etc/plasma/vnc-auth -rfbport 5900 -forever -shared -noxdamage \
+	-wait "$(((1000 + VNC_MAX_FPS - 1) / VNC_MAX_FPS))" -defer 0 "${extra[@]}"

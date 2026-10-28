@@ -1,0 +1,7 @@
+wine-core
+wine-common
+wine-cms
+wine-arial-winefonts
+wine-tahoma-winefonts
+wine-ms-sans-serif-winefonts
+unzip

@@ -1,0 +1,11 @@
+.git
+.agents
+.aws
+.codex
+.venv
+.env
+**/__pycache__
+artifacts
+tests
+expert
+.ruff_cache/

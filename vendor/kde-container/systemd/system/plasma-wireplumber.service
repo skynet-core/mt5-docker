@@ -1,0 +1,11 @@
+[Unit]
+Description=PipeWire session policy for the Plasma virtual monitor
+Requires=plasma-pipewire.service
+After=plasma-pipewire.service
+
+[Service]
+Type=exec
+User=plasma
+EnvironmentFile=/etc/plasma/session.env
+ExecStart=/usr/bin/wireplumber
+Restart=on-failure

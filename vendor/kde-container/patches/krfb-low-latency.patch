@@ -1,0 +1,37 @@
+--- a/krfb/rfbservermanager.cpp
++++ b/krfb/rfbservermanager.cpp
+@@ -209,5 +209,8 @@
+         screen->desktopName = d->desktopName.constData();
+         screen->cursor = d->myCursor;
++        // Qt already schedules and batches updates. LibVNCServer's additional
++        // deferral otherwise costs another whole Qt timer tick per frame.
++        screen->deferUpdateTime = 0;
+     }
+ 
+     return screen;
+@@ -219,6 +222,13 @@
+         // qDebug() << "Starting framebuffer monitor";
+         d->fb->startMonitor();
+-        d->rfbUpdateTimer.start(50ms);
++        bool validFps = false;
++        const int requestedFps = qEnvironmentVariableIntValue("VNC_MAX_FPS", &validFps);
++        const int fps = validFps ? qBound(1, requestedFps, 60) : 60;
++        // Round up so the timer does not exceed the requested frame rate.
++        const int intervalMs = (1000 + fps - 1) / fps;
++        d->rfbUpdateTimer.setTimerType(Qt::PreciseTimer);
++        d->rfbUpdateTimer.start(std::chrono::milliseconds(intervalMs));
++        qInfo() << "KRFB low-latency updates:" << intervalMs << "ms, no additional framebuffer deferral";
+     }
+     d->clients.insert(cc);
+ 
+--- a/framebuffers/pipewire/pw_framebuffer.cpp
++++ b/framebuffers/pipewire/pw_framebuffer.cpp
+@@ -113,5 +113,8 @@
+     , stream(new PipeWireSourceStream(q))
+ {
++    // Request damaged regions so a small UI change does not re-encode the
++    // entire desktop. handleFrame() already consumes this metadata.
++    stream->setDamageEnabled(true);
+     QObject::connect(stream.get(), &PipeWireSourceStream::frameReceived, q, [this](const PipeWireFrame &frame) {
+         handleFrame(frame);
+     });

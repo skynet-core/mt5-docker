@@ -1,0 +1,18 @@
+[Unit]
+Description=Read-only mt5-mcp account and market data server
+Requires=plasma-session.service
+After=plasma-session.service
+
+[Service]
+Type=exec
+User=plasma
+EnvironmentFile=/etc/plasma/session.env
+ExecStartPre=/usr/local/libexec/plasma-wait desktop
+ExecStart=/usr/local/libexec/mt5-mcp
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=15
+
+[Install]
+WantedBy=multi-user.target
+

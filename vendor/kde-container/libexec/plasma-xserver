@@ -1,0 +1,14 @@
+#!/usr/bin/bash
+set -euo pipefail
+args=("$PLASMA_X11_DISPLAY" -auth /etc/plasma/Xauthority -nolisten tcp -noreset)
+if [[ $DISPLAY_MODE != nested ]]; then
+	exec /usr/bin/Xvfb "${args[@]}" -screen 0 "${DISPLAY_WIDTH}x${DISPLAY_HEIGHT}x24" +extension GLX +extension RANDR
+elif [[ $HOST_DISPLAY_BACKEND == wayland ]]; then
+	export WAYLAND_DISPLAY=$HOST_WAYLAND_DISPLAY
+	# libdecor's GTK plugin can synchronously request the desktop portal before
+	# this X server is ready, while that portal is waiting for this X server.
+	exec /usr/bin/Xwayland "${args[@]}" -geometry "${DISPLAY_WIDTH}x${DISPLAY_HEIGHT}" -shm
+else
+	export DISPLAY=$HOST_DISPLAY XAUTHORITY=$HOST_XAUTHORITY
+	exec /usr/bin/Xephyr "${args[@]}" -screen "${DISPLAY_WIDTH}x${DISPLAY_HEIGHT}" -resizeable
+fi

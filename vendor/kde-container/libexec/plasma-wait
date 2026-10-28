@@ -1,0 +1,84 @@
+#!/usr/bin/python3
+"""Bounded readiness probes shared by services and the container health check."""
+
+import os
+import socket
+import subprocess
+import sys
+import time
+
+
+def ready(kind):
+    try:
+        if kind in ("vnc", "web"):
+            with socket.create_connection(
+                ("127.0.0.1", 5900 if kind == "vnc" else 6080), timeout=1
+            ) as connection:
+                if kind == "vnc":
+                    return connection.recv(12).startswith(b"RFB ")
+                connection.sendall(b"GET /vnc.html HTTP/1.0\r\nHost: localhost\r\n\r\n")
+                return b"200" in connection.recv(64).split(b"\r\n", 1)[0]
+        if kind == "wayland":
+            path = os.path.join(
+                os.environ["XDG_RUNTIME_DIR"], os.environ["WAYLAND_DISPLAY"]
+            )
+            with socket.socket(socket.AF_UNIX) as connection:
+                connection.settimeout(1)
+                connection.connect(path)
+            return True
+        if kind == "x11":
+            return (
+                subprocess.run(
+                    ["xdpyinfo"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=2,
+                    check=False,
+                ).returncode
+                == 0
+            )
+        if kind in ("desktop", "compositor"):
+            kiosk = bool(os.environ.get("TARGET_APP"))
+            service = (
+                "org.kde.KWin"
+                if kind == "compositor" or kiosk
+                else "org.kde.plasmashell"
+            )
+            result = subprocess.run(
+                [
+                    "dbus-send",
+                    "--session",
+                    "--print-reply",
+                    "--dest=org.freedesktop.DBus",
+                    "/org/freedesktop/DBus",
+                    "org.freedesktop.DBus.NameHasOwner",
+                    f"string:{service}",
+                ],
+                capture_output=True,
+                timeout=2,
+                check=False,
+            )
+            ready = result.returncode == 0 and b"boolean true" in result.stdout
+            if ready and kind == "desktop" and kiosk:
+                return (
+                    subprocess.run(
+                        ["/usr/local/libexec/plasma-target-app", "--check"],
+                        timeout=2,
+                        check=False,
+                    ).returncode
+                    == 0
+                )
+            return ready
+        raise ValueError(f"Unknown probe: {kind}")
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
+if __name__ == "__main__":
+    deadline = time.monotonic() + float(os.environ.get("PLASMA_WAIT_TIMEOUT", "60"))
+    while True:
+        if ready(sys.argv[1]):
+            break
+        if time.monotonic() >= deadline:
+            sys.exit(f"Timed out waiting for Plasma {sys.argv[1]}")
+        time.sleep(0.25)

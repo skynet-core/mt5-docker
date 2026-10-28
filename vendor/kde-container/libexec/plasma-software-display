@@ -1,0 +1,7 @@
+#!/usr/bin/bash
+set -euo pipefail
+# KWin's QPainter backend cannot feed its OpenGL-only screencast API. Its private
+# X11 parent lets x11vnc capture software frames while apps still use Wayland.
+exec /usr/bin/Xvfb "$PLASMA_SOFTWARE_DISPLAY" -auth /etc/plasma/Xauthority \
+	-screen 0 "${DISPLAY_WIDTH}x${DISPLAY_HEIGHT}x24" -nolisten tcp -noreset \
+	+extension GLX +extension RANDR

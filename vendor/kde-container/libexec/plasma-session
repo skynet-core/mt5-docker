@@ -1,0 +1,59 @@
+#!/usr/bin/bash
+set -euo pipefail
+
+if [[ -n ${TARGET_APP:-} ]]; then
+	/usr/local/libexec/plasma-target-app --configure
+	wrapper=/usr/bin/kwin_wayland_wrapper
+	prefix=/opt/kwin-6.8.2
+	if [[ $DISPLAY_BACKEND == wayland && -x $prefix/bin/kwin_wayland ]]; then
+		# Keep the compositor's Qt/KF stack out of its distro-built applications.
+		for name in PATH LD_LIBRARY_PATH QT_PLUGIN_PATH QML_IMPORT_PATH QML2_IMPORT_PATH XDG_CACHE_HOME XDG_DATA_DIRS; do
+			export "PLASMA_APP_$name=${!name-}"
+		done
+		export PATH="$prefix/bin:$PATH"
+		export LD_LIBRARY_PATH="$prefix/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+		export QT_PLUGIN_PATH="$prefix/plugins" QML_IMPORT_PATH="$prefix/qml"
+		unset QML2_IMPORT_PATH
+		export XDG_CACHE_HOME=/home/plasma/.cache/kwin-6.8.2
+		export XDG_DATA_DIRS="$prefix/share:${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"
+		export PLASMA_KWIN_BINARY="$prefix/bin/kwin_wayland"
+		wrapper=$prefix/bin/kwin_wayland_wrapper
+	fi
+	# startplasma normally prepares KDE's service metadata. Kiosk bypasses that
+	# bootstrap; older KWin needs the Plasma menu/cache to find scoped protocol
+	# permissions for KRFB, even though no desktop shell is launched.
+	kbuildsycoca6
+	if [[ $DISPLAY_BACKEND == x11 ]]; then
+		/usr/local/libexec/plasma-wait x11
+		pids=()
+		# Invoked by the EXIT trap when either process terminates.
+		# shellcheck disable=SC2329
+		cleanup() {
+			kill "${pids[@]}" 2>/dev/null || true
+			wait "${pids[@]}" 2>/dev/null || true
+		}
+		trap cleanup EXIT
+		trap 'exit 0' TERM INT
+		/usr/bin/kwin_x11 --replace &
+		pids+=("$!")
+		/usr/local/libexec/plasma-target-app &
+		pids+=("$!")
+		wait -n "${pids[@]}"
+		exit $?
+	fi
+	export PATH="/usr/local/libexec/plasma-backend:$PATH"
+	options=(--xwayland)
+	[[ -n ${PLASMA_KWIN_BINARY:-} ]] || options+=(--no-kactivities)
+	exec "$wrapper" "${options[@]}" \
+		--no-global-shortcuts --exit-with-session /usr/local/libexec/plasma-target-app
+fi
+
+if [[ $DISPLAY_BACKEND == x11 ]]; then
+	/usr/local/libexec/plasma-wait x11
+	exec /usr/bin/startplasma-x11
+fi
+
+# Plasma starts kwin_wayland_wrapper, which owns the sockets and publishes the
+# client environment. Its kwin_wayland child resolves through this mode adapter.
+export PATH="/usr/local/libexec/plasma-backend:$PATH"
+exec /usr/bin/startplasma-wayland

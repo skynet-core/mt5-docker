@@ -1,0 +1,5 @@
+winehq-devel=11.20~trixie-1
+fonts-wine
+libgnutls30t64
+libgnutls30t64:i386
+unzip

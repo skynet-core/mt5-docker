@@ -1,0 +1,18 @@
+[Unit]
+Description=Share clipboard and primary selection with the nested host
+Requires=plasma-session.service
+After=plasma-session.service plasma-xserver.service
+PartOf=plasma-session.service
+StartLimitIntervalSec=60
+StartLimitBurst=3
+
+[Service]
+Type=exec
+User=plasma
+EnvironmentFile=/etc/plasma/session.env
+ExecCondition=/usr/bin/test ${CLIPBOARD_SYNC} = 1
+ExecStartPre=/usr/local/libexec/plasma-wait ${DISPLAY_BACKEND}
+ExecStart=/usr/local/libexec/plasma-clipboard
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=5

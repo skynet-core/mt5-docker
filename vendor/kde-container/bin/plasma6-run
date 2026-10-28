@@ -1,0 +1,104 @@
+#!/usr/bin/env bash
+# Host launcher: mount only the host display sockets and an optional X11 cookie.
+set -euo pipefail
+runtime=${RUNTIME:-docker}
+image=${IMAGE_TAG:-plasma6:local}
+mode=${DISPLAY_MODE:-headless}
+backend=${DISPLAY_BACKEND:-auto}
+case ${runtime##*/} in
+docker | podman) engine=${runtime##*/} ;;
+*)
+	printf 'RUNTIME must name docker or podman\n' >&2
+	exit 1
+	;;
+esac
+args=(run --rm --name "${CONTAINER_NAME:-plasma6}" --user=0:0 --privileged --cgroupns=private
+	--pids-limit=8192 --shm-size=512m --tmpfs /run --tmpfs /tmp:mode=1777
+	-e "DISPLAY_MODE=$mode" -e "DISPLAY_BACKEND=$backend"
+	-e "DISPLAY_WIDTH=${DISPLAY_WIDTH:-1920}" -e "DISPLAY_HEIGHT=${DISPLAY_HEIGHT:-1080}")
+args+=(-e "VNC_MAX_FPS=${VNC_MAX_FPS:-60}")
+args+=(-e "CLIPBOARD_SYNC=${CLIPBOARD_SYNC:-1}")
+if [[ -n ${TARGET_APP:-} ]]; then args+=(-e "TARGET_APP=$TARGET_APP"); fi
+if [[ -n ${PLASMA_PASSWORD_FILE:-} ]]; then
+	plasma_password_file=$(realpath -- "$PLASMA_PASSWORD_FILE")
+	args+=(--mount "type=bind,source=$plasma_password_file,target=/run/secrets/plasma-password,readonly"
+		-e PLASMA_PASSWORD_FILE=/run/secrets/plasma-password)
+elif [[ -v PLASMA_PASSWORD ]]; then
+	export PLASMA_PASSWORD
+	args+=(-e PLASMA_PASSWORD)
+fi
+if [[ -v PLASMA_SUDO_NOPASSWD ]]; then
+	export PLASMA_SUDO_NOPASSWD
+	args+=(-e PLASMA_SUDO_NOPASSWD)
+fi
+if [[ $engine == podman ]]; then
+	# The inherited entrypoint is a shell script, so force systemd mount setup.
+	args+=(--systemd=always --passwd=false --userns=keep-id --health-cmd=/usr/local/bin/plasma-healthcheck
+		--health-interval=10s --health-timeout=5s --health-start-period=90s --health-retries=6)
+fi
+if [[ $engine == podman || $mode == nested ]]; then
+	args+=(-e "PLASMA_UID=${PLASMA_UID:-$(id -u)}" -e "PLASMA_GID=${PLASMA_GID:-$(id -g)}")
+else
+	if [[ -n ${PLASMA_UID:-} ]]; then args+=(-e "PLASMA_UID=$PLASMA_UID"); fi
+	if [[ -n ${PLASMA_GID:-} ]]; then args+=(-e "PLASMA_GID=$PLASMA_GID"); fi
+fi
+
+if [[ $mode == nested ]]; then
+	host_backend=${HOST_DISPLAY_BACKEND:-auto}
+	case $host_backend in auto | wayland | x11) ;; *)
+		printf 'Invalid HOST_DISPLAY_BACKEND\n' >&2
+		exit 1
+		;;
+	esac
+	if [[ $engine == docker ]]; then
+		args+=(--userns=host)
+	fi
+	wayland_socket=${WAYLAND_DISPLAY:-}
+	if [[ -n $wayland_socket && $wayland_socket != /* ]]; then
+		wayland_socket=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/$wayland_socket
+	fi
+	if [[ -z $wayland_socket ]]; then
+		for candidate in "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"/wayland-*; do
+			if [[ -S $candidate ]]; then
+				wayland_socket=$candidate
+				break
+			fi
+		done
+	fi
+	if [[ $host_backend == wayland && ! -S $wayland_socket ]]; then
+		printf 'HOST_DISPLAY_BACKEND=wayland requires a host Wayland socket\n' >&2
+		exit 1
+	fi
+	if [[ $host_backend != x11 && -S $wayland_socket ]]; then
+		args+=(--mount "type=bind,source=$wayland_socket,target=/run/host/wayland,readonly"
+			-e HOST_WAYLAND_DISPLAY=/run/host/wayland)
+	fi
+	if [[ ( $host_backend != wayland || ${CLIPBOARD_SYNC:-1} == 1 ) && -d /tmp/.X11-unix ]]; then
+		args+=(--mount 'type=bind,source=/tmp/.X11-unix,target=/run/host/X11,readonly')
+		if [[ -n ${DISPLAY:-} ]]; then args+=(-e "HOST_DISPLAY=$DISPLAY"); fi
+		if [[ -n ${XAUTHORITY:-} && -f $XAUTHORITY ]]; then
+			args+=(--mount "type=bind,source=$XAUTHORITY,target=/run/host/Xauthority,readonly"
+				-e HOST_XAUTHORITY=/run/host/Xauthority)
+		elif [[ -f ${HOME}/.Xauthority ]]; then
+			args+=(--mount "type=bind,source=${HOME}/.Xauthority,target=/run/host/Xauthority,readonly"
+				-e HOST_XAUTHORITY=/run/host/Xauthority)
+		fi
+	fi
+fi
+
+if [[ $mode == vnc || $mode == web ]]; then
+	if [[ -n ${VNC_PASSWORD_FILE:-} ]]; then
+		password_file=$(realpath "$VNC_PASSWORD_FILE")
+		args+=(--mount "type=bind,source=$password_file,target=/run/secrets/vnc-password,readonly"
+			-e VNC_PASSWORD_FILE=/run/secrets/vnc-password)
+	else
+		: "${VNC_PASSWORD:?Set VNC_PASSWORD or VNC_PASSWORD_FILE}"
+		export VNC_PASSWORD
+		args+=(-e VNC_PASSWORD)
+	fi
+	container_port=5900 port=${VNC_PORT:-5900}
+	if [[ $mode == web ]]; then container_port=6080 port=${WEB_PORT:-6080}; fi
+	[[ $port != 0 ]] || port=''
+	args+=(-p "${BIND_ADDRESS:-127.0.0.1}:$port:$container_port")
+fi
+exec "$runtime" "${args[@]}" "$@" "$image"

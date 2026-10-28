@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# Current MT5 rejects the distro Wine 10 loader; use its own WineHQ repository.
+set -euo pipefail
+# shellcheck disable=SC1091
+source /etc/os-release
+case "$ID:$VERSION_CODENAME" in
+debian:trixie) repository=debian; architectures='amd64 i386' ;;
+ubuntu:resolute) repository=ubuntu; architectures=amd64 ;;
+*) printf 'Unsupported WineHQ target: %s:%s\n' "$ID" "$VERSION_CODENAME" >&2; exit 1 ;;
+esac
+
+install -d -m 755 /etc/apt/keyrings
+curl --fail --location --retry 3 https://dl.winehq.org/wine-builds/winehq.key \
+	-o /etc/apt/keyrings/winehq.asc
+# Official public-key fingerprint: D43F640145369C51D786DDEA76F1A20FF987672F.
+printf '%s  %s\n' d965d646defe94b3dfba6d5b4406900ac6c81065428bf9d9303ad7a72ee8d1b8 \
+	/etc/apt/keyrings/winehq.asc | sha256sum --check -
+chmod 644 /etc/apt/keyrings/winehq.asc
+cat >/etc/apt/sources.list.d/winehq.sources <<EOF
+Types: deb
+URIs: https://dl.winehq.org/wine-builds/$repository
+Suites: $VERSION_CODENAME
+Components: main
+Architectures: $architectures
+Signed-By: /etc/apt/keyrings/winehq.asc
+EOF

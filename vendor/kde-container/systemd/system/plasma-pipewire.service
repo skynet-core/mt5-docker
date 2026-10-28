@@ -1,0 +1,11 @@
+[Unit]
+Description=PipeWire for the Plasma virtual monitor
+Requires=plasma-dbus.service
+After=plasma-dbus.service
+
+[Service]
+Type=exec
+User=plasma
+EnvironmentFile=/etc/plasma/session.env
+ExecStart=/usr/bin/pipewire
+Restart=on-failure

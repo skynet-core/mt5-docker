@@ -1,0 +1,13 @@
+servers.dat contains public IC Markets EU broker endpoint definitions only.
+It was exported from a fresh broker installation before any account was supplied.
+
+Official broker page:
+https://www.icmarkets.eu/en/forex-trading-platform-metatrader/metatrader-5
+Official WebTrader:
+https://webtrader.icmarkets.eu/
+MetaQuotes-hosted broker installer:
+https://download.mql5.com/cdn/web/18042/mt5/icmarketseu5setup.exe
+Installer signer: MetaQuotes Ltd
+Installer SHA256: beb21ded6f3e2be1f7aebcc08b36b8b1343d23ea71f954cb5ed431d6b4c66492
+servers.dat SHA256: 4267f9b4471d73785b17d32af833944370d8ffab620e4ad23e9a6ab188880f94
+Verified: 2026-10-28, fresh login resolved ICMarketsEU-Demo.

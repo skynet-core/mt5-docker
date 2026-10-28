@@ -1,0 +1,30 @@
+#!/usr/bin/python3
+import json
+import os
+
+with open("/run/plasma/mt5-environment.json") as stream:
+    os.environ.update(json.load(stream))
+# Upstream CLI ignores rate limits and registers MT5's thread-bound tools as workers.
+program = """
+import asyncio
+from mt5_mcp.mcp_server import create_mcp_server
+
+async def serve():
+    server = create_mcp_server(rate_limit_per_minute=0)
+    for name in ('mt5_query', 'mt5_analyze', 'mt5_execute'):
+        tool = await server.get_tool(name)
+        server.local_provider.remove_tool(name)
+        server.add_tool(tool.model_copy(update={'run_in_thread': False}))
+    await server.run_async(transport='http', host='0.0.0.0', port=8000, path='/mcp')
+
+asyncio.run(serve())
+"""
+os.execvp(
+    "wine",
+    [
+        "wine",
+        r"C:\Python\python.exe",
+        "-c",
+        program,
+    ],
+)

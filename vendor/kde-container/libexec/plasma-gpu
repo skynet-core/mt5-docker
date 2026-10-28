@@ -1,0 +1,184 @@
+#!/usr/bin/python3
+"""Check each render node using a real GBM/EGL context as the desktop user."""
+
+import ctypes
+import json
+import os
+import platform
+import subprocess
+import sys
+from pathlib import Path
+
+SOFTWARE_RENDERERS = (
+    "llvmpipe",
+    "softpipe",
+    "swrast",
+    "software rasterizer",
+    "swiftshader",
+    "lavapipe",
+)
+
+
+def requires_software(backend, mode):
+    """KWin 6.3's NVIDIA virtual-output path crashes during remote capture."""
+    if backend != "wayland" or mode not in ("vnc", "web"):
+        return False
+    if Path("/opt/kwin-6.8.2/bin/kwin_wayland").is_file():
+        return False
+    release = platform.freedesktop_os_release()
+    return (
+        release.get("ID") == "debian"
+        and release.get("VERSION_ID") == "13"
+        and any(
+            vendor.read_text().strip() == "0x10de"
+            for vendor in Path("/sys/class/drm").glob("renderD*/device/vendor")
+        )
+    )
+
+
+def probe(device):
+    egl = ctypes.CDLL("libEGL.so.1")
+    gbm = ctypes.CDLL("libgbm.so.1")
+    pointer = ctypes.c_void_p
+    integer = ctypes.c_int
+    unsigned = ctypes.c_uint
+
+    def bind(library, name, result, *arguments):
+        function = getattr(library, name)
+        function.restype = result
+        function.argtypes = list(arguments)
+        return function
+
+    create_gbm = bind(gbm, "gbm_create_device", pointer, integer)
+    destroy_gbm = bind(gbm, "gbm_device_destroy", None, pointer)
+    display_for = bind(
+        egl, "eglGetPlatformDisplay", pointer, unsigned, pointer, pointer
+    )
+    initialize = bind(egl, "eglInitialize", unsigned, pointer, pointer, pointer)
+    terminate = bind(egl, "eglTerminate", unsigned, pointer)
+    bind_api = bind(egl, "eglBindAPI", unsigned, unsigned)
+    choose = bind(
+        egl,
+        "eglChooseConfig",
+        unsigned,
+        pointer,
+        ctypes.POINTER(integer),
+        ctypes.POINTER(pointer),
+        integer,
+        ctypes.POINTER(integer),
+    )
+    create_context = bind(
+        egl,
+        "eglCreateContext",
+        pointer,
+        pointer,
+        pointer,
+        pointer,
+        ctypes.POINTER(integer),
+    )
+    destroy_context = bind(egl, "eglDestroyContext", unsigned, pointer, pointer)
+    make_current = bind(
+        egl, "eglMakeCurrent", unsigned, pointer, pointer, pointer, pointer
+    )
+    address = bind(egl, "eglGetProcAddress", pointer, ctypes.c_char_p)
+    get_error = bind(egl, "eglGetError", unsigned)
+
+    def check(value, operation):
+        if not value:
+            raise RuntimeError(f"{operation} failed (EGL {get_error():#x})")
+        return value
+
+    descriptor = os.open(device, os.O_RDWR | os.O_CLOEXEC)
+    native = display = context = None
+    initialized = False
+    try:
+        native = check(create_gbm(descriptor), "gbm_create_device")
+        # EGL_PLATFORM_GBM_KHR: check the actual driver, without a host display.
+        display = check(display_for(0x31D7, native, None), "eglGetPlatformDisplay(GBM)")
+        check(initialize(display, None, None), "eglInitialize")
+        initialized = True
+        check(bind_api(0x30A0), "eglBindAPI(OpenGL ES)")
+        config = pointer()
+        count = integer()
+        # Request an OpenGL ES 2 config and a surfaceless context.
+        attributes = (integer * 3)(0x3040, 4, 0x3038)
+        check(
+            choose(display, attributes, ctypes.byref(config), 1, ctypes.byref(count))
+            and count.value,
+            "eglChooseConfig",
+        )
+        context = check(
+            create_context(display, config, None, (integer * 3)(0x3098, 2, 0x3038)),
+            "eglCreateContext",
+        )
+        check(make_current(display, None, None, context), "eglMakeCurrent")
+        get_string = ctypes.CFUNCTYPE(ctypes.c_char_p, unsigned)(
+            check(address(b"glGetString"), "glGetString")
+        )
+        vendor = check(get_string(0x1F00), "GL_VENDOR").decode()
+        renderer = check(get_string(0x1F01), "GL_RENDERER").decode()
+        return {
+            "device": device,
+            "vendor": vendor,
+            "renderer": renderer,
+            "hardware": not any(
+                name in renderer.lower() for name in SOFTWARE_RENDERERS
+            ),
+        }
+    finally:
+        if context:
+            make_current(display, None, None, None)
+            destroy_context(display, context)
+        if initialized:
+            terminate(display)
+        if native:
+            destroy_gbm(native)
+        os.close(descriptor)
+
+
+def detect():
+    devices = []
+    for path in sorted(Path("/dev/dri").glob("renderD*")):
+        if not path.is_char_device():
+            continue
+        result = None
+        try:
+            # Isolate driver crashes/hangs so another GPU can still be used.
+            result = subprocess.run(
+                [sys.executable, __file__, str(path)],
+                capture_output=True,
+                text=True,
+                timeout=8,
+                check=False,
+            )
+            device = json.loads(result.stdout)
+            if not isinstance(device, dict) or device.get("device") != str(path):
+                raise ValueError("GPU probe returned invalid data")
+        except (OSError, ValueError, subprocess.TimeoutExpired) as error:
+            detail = str(error)
+            if result is not None:
+                detail += f"; exit={result.returncode}; {result.stderr or ''}"
+            device = {"device": str(path), "hardware": False, "error": detail}
+        if device.get("hardware"):
+            print(f"Plasma GPU: {device['renderer']} ({path})", file=sys.stderr)
+        devices.append(device)
+    return devices
+
+
+def main():
+    if len(sys.argv) == 4 and sys.argv[1] == "--requires-software":
+        return 0 if requires_software(sys.argv[2], sys.argv[3]) else 1
+    if len(sys.argv) == 2:
+        try:
+            result = probe(sys.argv[1])
+        except (OSError, RuntimeError, AttributeError) as error:
+            result = {"device": sys.argv[1], "hardware": False, "error": str(error)}
+        print(json.dumps(result))
+        return 0
+    devices = detect()
+    print(json.dumps({"devices": devices}, indent=2))
+    return 0 if any(device.get("hardware") for device in devices) else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

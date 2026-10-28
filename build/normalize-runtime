@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+set -euo pipefail
+# Qt tool names vary; diagnostics use one stable spelling across distributions.
+if ! command -v qdbus-qt6 >/dev/null; then
+	for tool in qdbus6 /usr/lib/qt6/bin/qdbus /usr/lib64/qt6/bin/qdbus; do
+		if resolved=$(command -v "$tool"); then
+			ln -s "$resolved" /usr/local/bin/qdbus-qt6
+			break
+		fi
+	done
+fi

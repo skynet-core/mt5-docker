@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+set -euo pipefail
+root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+export IMAGE_TAG=${IMAGE_TAG:-mt5:fedora-44}
+export CONTAINER_NAME=${CONTAINER_NAME:-mt5}
+args=(--mount "type=volume,source=${MT5_VOLUME:-mt5-data},target=/home/plasma/.wine"
+	-p "${BIND_ADDRESS:-127.0.0.1}:${MT5_MCP_PORT:-8000}:8000"
+	-p "${BIND_ADDRESS:-127.0.0.1}:${MT5_NATIVE_MCP_PORT:-22346}:22347"
+	-p "${BIND_ADDRESS:-127.0.0.1}:${MT5_EDITOR_MCP_PORT:-22345}:22349")
+for key in MT5_ACCOUNT MT5_LOGIN MT5_PASSWORD MT5_SERVER; do
+	if [[ -v $key ]]; then export "${key?}"; args+=(-e "$key"); fi
+done
+if [[ -n ${MT5_CONFIG_FILE:-} ]]; then
+	config=$(realpath -- "$MT5_CONFIG_FILE")
+	args+=(--mount "type=bind,source=$config,target=/run/secrets/mt5-config.ini,readonly"
+		-e MT5_CONFIG_FILE=/run/secrets/mt5-config.ini)
+fi
+launcher="$root/vendor/kde-container/bin/plasma6-run"
+if [[ -n ${MT5_ENV_FILE:-} || -f $root/.env ]]; then
+	exec uv run --script "$root/libexec/host-env" "${MT5_ENV_FILE:-$root/.env}" \
+		"$launcher" "${args[@]}" "$@"
+fi
+exec "$launcher" "${args[@]}" "$@"
+

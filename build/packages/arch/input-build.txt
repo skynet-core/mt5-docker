@@ -1,0 +1,11 @@
+cmake
+ninja
+gcc
+make
+qt6-base
+kcoreaddons
+wayland
+libvncserver
+libxkbcommon
+libx11
+pkgconf

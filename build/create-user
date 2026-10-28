@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+set -euo pipefail
+uid=${PLASMA_UID:-1000}
+gid=${PLASMA_GID:-1000}
+group=$(getent group "$gid" | cut -d: -f1 || true)
+if [[ -z $group ]]; then
+	groupadd --gid "$gid" plasma
+	group=plasma
+fi
+existing=$(getent passwd "$uid" | cut -d: -f1 || true)
+if [[ $existing == ubuntu ]]; then
+	# Ubuntu's official image reserves UID 1000. Preserve its home while naming
+	# the account consistently with the other desktop images.
+	usermod --login plasma --home /home/plasma --move-home ubuntu
+	usermod --gid "$group" plasma
+elif [[ -n $existing ]]; then
+	printf 'Requested desktop UID already belongs to %s\n' "$existing" >&2
+	exit 1
+else
+	useradd --uid "$uid" --gid "$group" --create-home --shell /bin/bash plasma
+fi
+chown -R plasma: /home/plasma
+install -d -m 1777 /tmp/.X11-unix
+install -d /etc/plasma /opt/noVNC

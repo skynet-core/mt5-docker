@@ -1,0 +1,90 @@
+#!/usr/bin/python3
+"""Make krfb's exported monitor the sole active output, including the desktop panel."""
+
+import json
+import os
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+
+def kscreen(*arguments, **options):
+    environment = dict(os.environ)
+    binary = "kscreen-doctor"
+    prefix = Path("/opt/kwin-6.8.2")
+    if (prefix / "bin/kscreen-doctor").is_file():
+        # KWin 6.8 replaced the output-device global with a registry. Its
+        # matching client needs the private Qt stack, scoped to this process.
+        binary = str(prefix / "bin/kscreen-doctor")
+        environment["LD_LIBRARY_PATH"] = str(prefix / "lib") + (
+            ":" + environment["LD_LIBRARY_PATH"]
+            if environment.get("LD_LIBRARY_PATH")
+            else ""
+        )
+        environment["QT_PLUGIN_PATH"] = str(prefix / "plugins")
+        environment["QML_IMPORT_PATH"] = str(prefix / "qml")
+        environment.pop("QML2_IMPORT_PATH", None)
+        environment["XDG_DATA_DIRS"] = (
+            str(prefix / "share")
+            + ":"
+            + environment.get("XDG_DATA_DIRS", "/usr/local/share:/usr/share")
+        )
+    return subprocess.run([binary, *arguments], env=environment, check=True, **options)
+
+
+def outputs():
+    result = kscreen("-j", capture_output=True, text=True, timeout=5)
+    items = json.loads(result.stdout)["outputs"]
+    if any(not {"id", "name"}.issubset(item) for item in items):
+        raise ValueError("Waiting for complete output information")
+    # Some KScreen versions omit enabled for newly created virtual outputs.
+    # An assigned nonzero output priority also identifies an active output.
+    for item in items:
+        item.setdefault("enabled", item.get("priority", 0) > 0)
+    return items
+
+
+def configured(items):
+    active = [item for item in items if item["enabled"]]
+    existing = (
+        os.environ.get("PLASMA_SOFTWARE_CAPTURE") == "1"
+        or os.environ.get("PLASMA_VNC_EXISTING_OUTPUT") == "1"
+    )
+    return (
+        len(active) == 1
+        and (existing or active[0]["name"] == "Virtual-Plasma")
+        and active[0].get("pos") == {"x": 0, "y": 0}
+    )
+
+
+if os.environ["DISPLAY_BACKEND"] == "wayland":
+    deadline = time.monotonic() + 60
+    while True:
+        try:
+            items = outputs()
+            if "--check" in sys.argv:
+                sys.exit(0 if configured(items) else 1)
+            if configured(items):
+                break
+            remote = next(
+                (item for item in items if item["name"] == "Virtual-Plasma"), None
+            )
+            if remote:
+                commands = [
+                    f"output.{remote['id']}.enable",
+                    f"output.{remote['id']}.position.0,0",
+                    f"output.{remote['id']}.priority.1",
+                ]
+                commands += [
+                    f"output.{item['id']}.disable"
+                    for item in items
+                    if item is not remote and item["enabled"]
+                ]
+                kscreen(*commands, timeout=5)
+        except (subprocess.SubprocessError, ValueError) as error:
+            if "--check" in sys.argv or time.monotonic() >= deadline:
+                sys.exit(str(error))
+        if time.monotonic() >= deadline:
+            sys.exit("Timed out configuring the Plasma VNC monitor")
+        time.sleep(0.25)

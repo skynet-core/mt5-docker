@@ -1,0 +1,51 @@
+#!/usr/bin/python3
+"""Materialize account configuration privately; never put secrets in session.env."""
+
+import configparser
+import os
+import pwd
+from pathlib import Path
+
+
+def configure():
+    config = configparser.ConfigParser(interpolation=None)
+    config.optionxform = str
+    source = Path(os.environ.get("MT5_CONFIG_FILE", "/etc/mt5/config.ini"))
+    with source.open(encoding="utf-8-sig") as stream:
+        config.read_file(stream)
+    values = {
+        "Login": os.environ.get("MT5_LOGIN", os.environ.get("MT5_ACCOUNT", "")),
+        "Password": os.environ.get("MT5_PASSWORD", ""),
+        "Server": os.environ.get("MT5_SERVER", ""),
+    }
+    if any(values.values()):
+        if not all(values.values()):
+            raise ValueError("Set MT5_ACCOUNT, MT5_PASSWORD and MT5_SERVER together")
+        if not values["Login"].isascii() or not values["Login"].isdecimal():
+            raise ValueError("MT5_ACCOUNT must be an account number")
+        if any(
+            "\n" in value or "\r" in value or "\0" in value for value in values.values()
+        ):
+            raise ValueError("MT5 account settings must be single lines")
+        if not config.has_section("Common"):
+            config.add_section("Common")
+        config["Common"].update(values)
+
+    account = pwd.getpwnam("plasma")
+    destination = Path(account.pw_dir) / ".wine/drive_c/MT5/config.ini"
+    if not (destination.parent / "terminal64.exe").is_file():
+        raise FileNotFoundError(
+            "MT5 Wine volume is missing terminal64.exe; use a fresh named volume"
+        )
+    # Create with private permissions before writing, including on the first boot.
+    descriptor = os.open(
+        destination, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600
+    )
+    with os.fdopen(descriptor, "w", encoding="utf-16", newline="\r\n") as stream:
+        os.fchmod(stream.fileno(), 0o600)
+        os.fchown(stream.fileno(), account.pw_uid, account.pw_gid)
+        config.write(stream, space_around_delimiters=False)
+
+
+if __name__ == "__main__":
+    configure()

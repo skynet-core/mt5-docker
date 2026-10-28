@@ -1,0 +1,9 @@
+cmake
+ninja-build
+gcc-c++
+qt6-qtbase-devel
+kf6-kcoreaddons-devel
+wayland-devel
+libvncserver-devel
+libxkbcommon-devel
+libX11-devel

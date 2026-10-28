@@ -1,0 +1,10 @@
+[Unit]
+Description=Prepare host X11 socket after boot-time temporary file cleanup
+After=systemd-tmpfiles-setup.service
+Before=plasma-dbus.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/plasma/session.env
+ExecStart=/usr/local/libexec/plasma-host-display
+RemainAfterExit=yes

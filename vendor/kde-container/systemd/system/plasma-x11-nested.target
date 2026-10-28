@@ -1,0 +1,7 @@
+[Unit]
+Description=Plasma 6 x11 nested desktop
+Requires=multi-user.target plasma-session.service plasma-xserver.service
+After=multi-user.target plasma-session.service plasma-xserver.service
+Wants=plasma-clipboard.service
+After=plasma-clipboard.service
+AllowIsolate=yes

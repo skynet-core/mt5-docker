@@ -1,0 +1,13 @@
+[Unit]
+Description=Private Plasma desktop session bus
+Requires=plasma-host-display.service
+After=dbus.service plasma-host-display.service
+
+[Service]
+Type=exec
+User=plasma
+RuntimeDirectory=plasma
+RuntimeDirectoryMode=0700
+EnvironmentFile=/etc/plasma/session.env
+ExecStart=/usr/bin/dbus-daemon --session --nofork --nopidfile --address=unix:path=/run/plasma/bus
+Restart=on-failure

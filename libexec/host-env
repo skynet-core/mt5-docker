@@ -1,0 +1,26 @@
+# /// script
+# requires-python = ">=3.12"
+# dependencies = ["python-dotenv==1.2.4"]
+# ///
+"""Load dotenv syntax without putting credential values in command arguments."""
+
+import os
+import sys
+from pathlib import Path
+
+from dotenv import dotenv_values
+
+
+def environment(path):
+    with Path(path).open() as stream:
+        values = dotenv_values(stream=stream, interpolate=False)
+    return {key: value for key, value in values.items() if value is not None}
+
+
+if __name__ == "__main__":
+    settings = environment(sys.argv[1])
+    for key, value in settings.items():
+        os.environ.setdefault(key, value)
+    command = sys.argv[2:]
+    command.extend(argument for key in settings for argument in ("-e", key))
+    os.execvp(command[0], command)

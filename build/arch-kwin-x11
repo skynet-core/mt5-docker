@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+set -euo pipefail
+# Arch dropped the X11 package; its separate namespace leaves Wayland KWin intact.
+# shortcut: X11 uses pinned 6.7.5; replace when a maintained Arch package returns.
+version=6.7.5
+checksum=d5463281a42dbe04eca630653fe6486f60da328750778bd75d8dee4948c90f34
+curl --fail --location --retry 3 \
+	"https://codeload.github.com/KDE/kwin-x11/tar.gz/refs/tags/v$version" \
+	--output /tmp/kwin-x11.tar.gz
+printf '%s  %s\n' "$checksum" /tmp/kwin-x11.tar.gz | sha256sum --check -
+mkdir /kwin-x11-source
+tar -xzf /tmp/kwin-x11.tar.gz --strip-components=1 -C /kwin-x11-source
+cmake -S /kwin-x11-source -B /kwin-x11-build -G Ninja \
+	-DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr \
+	-DCMAKE_INSTALL_LIBDIR=lib -DBUILD_TESTING=OFF \
+	-DKWIN_BUILD_KCMS=OFF -DKWIN_BUILD_TABBOX=OFF \
+	-DKWIN_BUILD_NOTIFICATIONS=OFF -DKWIN_BUILD_SCREENLOCKER=OFF \
+	-DKWIN_BUILD_GLOBALSHORTCUTS=OFF -DKWIN_BUILD_RUNNERS=OFF \
+	-DKWIN_BUILD_NIGHTLIGHT=OFF -DKWIN_BUILD_ACTIVITIES=OFF \
+	-DCMAKE_DISABLE_FIND_PACKAGE_KF6DocTools=ON
+cmake --build /kwin-x11-build --parallel 8
+DESTDIR=/out/root cmake --install /kwin-x11-build --strip
+# Development headers, exports and translations are unnecessary for the kiosk.
+rm -rf /out/root/usr/include /out/root/usr/lib/cmake /out/root/usr/share/locale \
+	/out/root/usr/share/doc /out/root/usr/share/man
+test -x /out/root/usr/bin/kwin_x11
+test -f /out/root/usr/lib/libkwin-x11.so.6
+test ! -e /out/root/usr/bin/kwin_wayland
+test ! -e /out/root/usr/lib/libkwin.so.6

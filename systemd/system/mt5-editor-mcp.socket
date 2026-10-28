@@ -1,0 +1,10 @@
+[Unit]
+Description=Native MetaEditor MCP endpoint
+
+[Socket]
+ListenStream=0.0.0.0:22349
+Service=mt5-native-mcp@22345.service
+
+[Install]
+WantedBy=sockets.target
+

@@ -1,0 +1,5 @@
+[Unit]
+Description=Plasma 6 x11 headless desktop
+Requires=multi-user.target plasma-session.service plasma-xserver.service
+After=multi-user.target plasma-session.service plasma-xserver.service
+AllowIsolate=yes

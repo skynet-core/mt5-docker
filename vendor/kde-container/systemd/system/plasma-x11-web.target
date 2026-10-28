@@ -1,0 +1,5 @@
+[Unit]
+Description=Plasma 6 x11 web desktop
+Requires=multi-user.target plasma-session.service plasma-xserver.service plasma-vnc.service plasma-web.service
+After=multi-user.target plasma-session.service plasma-xserver.service plasma-vnc.service plasma-web.service
+AllowIsolate=yes

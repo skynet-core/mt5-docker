@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+# Package lists are copied per stage, keeping unrelated distro/phase caches separate.
+set -euo pipefail
+# shellcheck disable=SC1091
+source /etc/os-release
+phase=${1:?package phase required}
+mapfile -t packages < <(sed '/^[[:space:]]*#/d; /^[[:space:]]*$/d' "/build-support/packages/$phase.txt")
+case $ID in
+fedora)
+	dnf install -y --setopt=install_weak_deps=False "${packages[@]}"
+	dnf clean all
+	;;
+debian | ubuntu)
+	export DEBIAN_FRONTEND=noninteractive
+	if [[ $phase == wine ]]; then
+		# The x64 WebView2 installer itself is a 32-bit executable.
+		dpkg --add-architecture i386
+	fi
+	apt-get update
+	apt-get install -y --no-install-recommends "${packages[@]}"
+	rm -rf /var/lib/apt/lists/*
+	;;
+arch)
+	# A rolling system must be updated as a whole, rather than partially upgraded.
+	pacman -Syu --noconfirm --needed "${packages[@]}"
+	pacman -Scc --noconfirm
+	if [[ $phase == desktop ]]; then
+		uv venv --system-site-packages --no-managed-python --python /usr/bin/python /opt/websockify
+		uv pip install --python /opt/websockify/bin/python --no-cache --no-deps \
+			--require-hashes -r /build-support/websockify-requirements.txt
+		ln -s /opt/websockify/bin/websockify /usr/local/bin/websockify
+	fi
+	;;
+*)
+	printf 'Unsupported distribution: %s\n' "$ID" >&2
+	exit 1
+	;;
+esac
+if [[ $phase == wine ]] && ! command -v wineserver >/dev/null; then
+	# Ubuntu 26.04 installs the server below its multiarch library directory.
+	for server in /usr/lib/x86_64-linux-gnu/wine/wineserver /usr/bin/wineserver-stable /usr/lib/wine/wineserver64 /usr/lib/wine/wineserver; do
+		if [[ -x $server ]]; then
+			ln -s "$server" /usr/local/bin/wineserver
+			break
+		fi
+	done
+	command -v wineserver >/dev/null
+fi

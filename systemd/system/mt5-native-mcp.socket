@@ -1,0 +1,10 @@
+[Unit]
+Description=Native MT5 MCP endpoint
+
+[Socket]
+ListenStream=0.0.0.0:22347
+Service=mt5-native-mcp@22346.service
+
+[Install]
+WantedBy=sockets.target
+

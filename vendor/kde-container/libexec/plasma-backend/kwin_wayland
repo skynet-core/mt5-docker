@@ -1,0 +1,43 @@
+#!/usr/bin/bash
+set -euo pipefail
+# Preserve the socket FDs and Xwayland authentication supplied by KDE's wrapper.
+# KWin 6.8 starts numbering at wayland-1. Services and external clients use the
+# stable private wayland-0 name; alias the wrapper's already bound socket.
+previous=
+for option in "$@"; do
+    if [[ $previous == --socket ]]; then
+        if [[ $option != wayland-0 ]]; then
+            alias_path="$XDG_RUNTIME_DIR/wayland-0"
+            if [[ -e $alias_path && ! -L $alias_path ]]; then
+                printf 'Private Wayland socket name is already in use: %s\n' "$alias_path" >&2
+                exit 1
+            fi
+            ln -sfn -- "$option" "$alias_path"
+        fi
+        break
+    fi
+    previous=$option
+done
+unset WAYLAND_DISPLAY DISPLAY QT_QPA_PLATFORM
+args=(--width "$DISPLAY_WIDTH" --height "$DISPLAY_HEIGHT")
+[[ -n ${PLASMA_KWIN_BINARY:-} ]] || args+=(--no-lockscreen)
+if [[ $DISPLAY_MODE == nested ]]; then
+    case $HOST_DISPLAY_BACKEND in
+        wayland) args+=(--wayland-display "$HOST_WAYLAND_DISPLAY") ;;
+        x11)
+            export XAUTHORITY=$HOST_XAUTHORITY
+            args+=(--x11-display "$HOST_DISPLAY")
+            ;;
+    esac
+elif [[ ${PLASMA_SOFTWARE_CAPTURE:-0} == 1 ]]; then
+    export XAUTHORITY=/etc/plasma/Xauthority
+    DISPLAY=$PLASMA_SOFTWARE_DISPLAY /usr/local/libexec/plasma-wait x11
+    args+=(--x11-display "$PLASMA_SOFTWARE_DISPLAY")
+else
+    args+=(--virtual)
+fi
+if [[ ${PLASMA_NVIDIA_SYNC:-0} == 1 ]]; then
+    export PLASMA_KWIN_ORIGINAL_LD_PRELOAD=${LD_PRELOAD:-}
+    export LD_PRELOAD="/usr/local/lib/plasma6/egl-fence-wait.so${LD_PRELOAD:+:$LD_PRELOAD}"
+fi
+exec "${PLASMA_KWIN_BINARY:-/usr/bin/kwin_wayland}" "${args[@]}" "$@"

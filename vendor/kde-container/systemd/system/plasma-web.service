@@ -1,0 +1,14 @@
+[Unit]
+Description=noVNC browser access to Plasma
+Requires=plasma-vnc.service
+After=plasma-vnc.service
+
+[Service]
+Type=exec
+User=plasma
+EnvironmentFile=/etc/plasma/session.env
+ExecStartPre=/usr/local/libexec/plasma-wait vnc
+ExecStart=/usr/bin/env websockify --web=/opt/noVNC 6080 127.0.0.1:5900
+Restart=on-failure
+RestartSec=3
+TimeoutStartSec=75

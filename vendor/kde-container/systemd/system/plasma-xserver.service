@@ -1,0 +1,13 @@
+[Unit]
+Description=Private X11 display for Plasma
+Requires=plasma-dbus.service
+After=plasma-dbus.service
+Before=plasma-session.service
+
+[Service]
+Type=exec
+User=plasma
+EnvironmentFile=/etc/plasma/session.env
+ExecStart=/usr/local/libexec/plasma-xserver
+Restart=on-failure
+RestartSec=3

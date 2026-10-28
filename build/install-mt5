@@ -1,0 +1,88 @@
+#!/usr/bin/env bash
+# Seed one credential-free prefix; Docker populates a fresh named volume from it.
+set -euo pipefail
+export WINEPREFIX=/home/plasma/.wine WINEDEBUG=-all WINEDLLOVERRIDES='mscoree,mshtml='
+export LIBGL_ALWAYS_SOFTWARE=1
+if [[ -d /usr/lib64/wine-wow64 ]]; then export WINEARCH=wow64; fi
+export DISPLAY=:99
+install -d -m 1777 /tmp/.X11-unix
+install -d -o plasma -g "$(id -g plasma)" "$WINEPREFIX"
+Xvfb "$DISPLAY" -screen 0 1920x1080x24 -nolisten tcp -ac >/tmp/mt5-xvfb.log 2>&1 &
+display_pid=$!
+cleanup() {
+	runuser -u plasma -- wineserver -k 2>/dev/null || true
+	kill "$display_pid" 2>/dev/null || true
+}
+trap cleanup EXIT
+for ((attempt=0; attempt<60; attempt++)); do
+	if xdpyinfo >/dev/null 2>&1; then break; fi
+	sleep 0.25
+done
+xdpyinfo >/dev/null
+timeout 120 runuser -u plasma -- wine wineboot.exe --init
+runuser -u plasma -- wine reg add 'HKCU\Software\Wine' /v Version /d win10 /f
+runuser -u plasma -- wine reg add 'HKCU\Software\Wine\Drivers' /v Graphics /d x11 /f
+
+curl --fail --location --retry 3 https://download.mql5.com/cdn/web/metaquotes.ltd/mt5/mt5setup.exe -o /tmp/mt5setup.exe
+curl --fail --location --retry 3 'https://go.microsoft.com/fwlink/?LinkId=2124701' -o /tmp/webview2.exe
+curl --fail --location --retry 3 https://www.python.org/ftp/python/3.12.10/python-3.12.10-embed-amd64.zip -o /tmp/python.zip
+sha256sum /tmp/mt5setup.exe /tmp/webview2.exe /tmp/python.zip
+
+# Installers may leave their update processes alive; require the actual payload.
+set +e
+timeout 600 runuser -u plasma -- wine /tmp/webview2.exe /silent /install
+webview_status=$?
+set -e
+if [[ $webview_status != 0 && $webview_status != 124 ]]; then
+	printf 'WebView2 installer failed: %s\n' "$webview_status" >&2
+	exit 1
+fi
+webview=$(find "$WINEPREFIX/drive_c" -type f -iname msedgewebview2.exe -print -quit)
+[[ -n $webview ]] || { printf 'WebView2 runtime executable was not installed\n' >&2; exit 1; }
+runuser -u plasma -- wineserver -k -w
+set +e
+timeout 600 runuser -u plasma -- wine /tmp/mt5setup.exe /auto '/path:C:\MT5'
+mt5_status=$?
+set -e
+if [[ $mt5_status != 0 && $mt5_status != 1 && $mt5_status != 124 ]]; then
+	printf 'MT5 installer failed: %s\n' "$mt5_status" >&2
+	exit 1
+fi
+# The official installer returns 1 on completion under Wine; verify every payload.
+for executable in terminal64.exe metaeditor64.exe metatester64.exe; do
+	payload=$(find "$WINEPREFIX/drive_c/MT5" -maxdepth 1 -type f -iname "$executable" -size +0c -print -quit)
+	[[ -n $payload ]] || { printf 'Missing MT5 executable: %s\n' "$executable" >&2; exit 1; }
+done
+runuser -u plasma -- wineserver -k -w
+
+# Public broker definitions let the confirmed friendly server name resolve on first boot.
+install -o plasma -g "$(id -g plasma)" -m 644 /build-support/servers.dat \
+	"$WINEPREFIX/drive_c/MT5/Config/servers.dat"
+python_root="$WINEPREFIX/drive_c/Python"
+install -d "$python_root/Lib/site-packages"
+unzip -q /tmp/python.zip -d "$python_root"
+printf 'python312.zip\n.\nLib/site-packages\nimport site\n' >"$python_root/python312._pth"
+UV_CACHE_DIR=/tmp/uv-cache uv pip install --python-version 3.12 --python-platform x86_64-pc-windows-msvc \
+	--target "$python_root/Lib/site-packages" -r /build-support/mt5-mcp-requirements.txt
+UV_CACHE_DIR=/tmp/uv-cache uv pip install --python-version 3.12 --python-platform x86_64-pc-windows-msvc \
+	--target "$python_root/Lib/site-packages" --no-deps mt5-mcp==0.6.3
+chown -R plasma: "$python_root"
+if [[ $(wine --version) == wine-10.0* ]]; then
+	# Wine 10 lacks complex-math UCRT exports used by NumPy and SciPy wheels.
+	curl --fail --location --retry 3 \
+		https://download.visualstudio.microsoft.com/download/pr/85d47aa9-69ae-4162-8300-e6b7e4bf3cf3/52B196BBE9016488C735E7B41805B651261FFA5D7AA86EB6A1D0095BE83687B2/VC_redist.x64.exe \
+		-o /tmp/ucrt-redist.exe
+	printf '%s  %s\n' 52b196bbe9016488c735e7b41805b651261ffa5d7aa86eb6a1d0095be83687b2 /tmp/ucrt-redist.exe | sha256sum --check -
+	mkdir /tmp/ucrt
+	cabextract --directory=/tmp/ucrt --filter=a10 /tmp/ucrt-redist.exe
+	cabextract --directory="$WINEPREFIX/drive_c/windows/system32" --filter=ucrtbase.dll /tmp/ucrt/a10
+	chown plasma: "$WINEPREFIX/drive_c/windows/system32/ucrtbase.dll"
+	runuser -u plasma -- wine reg add 'HKCU\Software\Wine\AppDefaults\python.exe\DllOverrides' /v ucrtbase /d native,builtin /f
+	rm -rf /tmp/ucrt /tmp/ucrt-redist.exe
+fi
+timeout 120 runuser -u plasma -- wine 'C:\Python\python.exe' -c 'import MetaTrader5, mt5_mcp, matplotlib, fastmcp, win32api, pywintypes, pythoncom; from scipy.special import ndtr; assert ndtr(0) == 0.5; from mt5_mcp.mcp_server import create_mcp_server; create_mcp_server(); print("Windows MT5 MCP imports verified")'
+runuser -u plasma -- wineserver -k -w
+rm -rf "$WINEPREFIX/drive_c/Program Files (x86)/Microsoft/EdgeUpdate/Download" \
+	"$WINEPREFIX/drive_c/users/plasma/AppData/Roaming/MetaQuotes/WebInstall"
+rm -rf /tmp/uv-cache /tmp/mt5setup.exe /tmp/webview2.exe /tmp/python.zip
+find "$WINEPREFIX/drive_c" -type d -name __pycache__ -prune -exec rm -rf {} +

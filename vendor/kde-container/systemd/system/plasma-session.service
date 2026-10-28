@@ -1,0 +1,14 @@
+[Unit]
+Description=Plasma 6 desktop session
+Requires=plasma-dbus.service
+After=plasma-dbus.service
+After=plasma-software-display.service
+
+[Service]
+Type=exec
+User=plasma
+EnvironmentFile=/etc/plasma/session.env
+ExecStart=/usr/local/libexec/plasma-session
+Restart=always
+RestartSec=3
+TimeoutStopSec=20
