@@ -35,6 +35,15 @@ The command lists every checked file, including vendored code, extensionless
 scripts and new unignored files. Generated artifacts and virtual environments
 are excluded through Git's ignore rules. Any linter finding fails the checks job.
 
+The checks job also resolves the runtime requirements universally and for Linux
+CPython 3.12, then dry-runs the Windows installation used by the image build.
+MetaTrader5 ships only Windows wheels, so its `sys_platform == 'win32'` marker
+must remain in both `build/mt5-mcp-requirements.in` and the compiled `.txt` file.
+Keep `--universal` in the compiled file's command header: Dependabot preserves
+that option when regenerating the requirements on Linux. Marker regression tests
+and actual resolver checks run before any image jobs; Windows still installs the
+SDK and Win32 helpers.
+
 The matching Qt fixture is exported from the `runtime-test` target and mounted
 read-only during compositor tests. Its test-only screenshot permission entry is
 also mounted for headless capture. Both are excluded from the published image.

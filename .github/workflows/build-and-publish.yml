@@ -45,6 +45,16 @@ jobs:
           uv run --locked python build/lint.py
           python3 build/render-dockerfiles.py --check
 
+      - name: Check Dependabot and Windows dependency resolution
+        run: |
+          uv pip compile build/mt5-mcp-requirements.in --universal --python-version 3.12 \
+            --constraints build/mt5-mcp-requirements.txt --output-file "$RUNNER_TEMP/mt5-universal.txt"
+          uv pip compile build/mt5-mcp-requirements.in build/mt5-mcp-requirements.txt \
+            --python-version 3.12 --python-platform x86_64-manylinux_2_39 \
+            --output-file "$RUNNER_TEMP/mt5-linux.txt"
+          uv pip install --dry-run --python-version 3.12 --python-platform x86_64-pc-windows-msvc \
+            --target "$RUNNER_TEMP/mt5-windows" -r build/mt5-mcp-requirements.txt
+
       - name: Validate workflow syntax
         run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 .github/workflows/build-and-publish.yml
 
