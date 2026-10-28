@@ -2,6 +2,8 @@
 
 [`build-and-publish.yml`](workflows/build-and-publish.yml) uses standard free
 `ubuntu-24.04` runners. Each distribution gets its own runner and build cache.
+New runs cancel superseded runs for the same branch or tag, freeing hosted
+runners for the current commit.
 
 ## Checks and image tests
 
