@@ -29,3 +29,11 @@ Local changes:
 - The test-only GUI fixture can capture actual headless outputs through KWin's
   ScreenShot2 API or the X11 root screen. Its Save button has a solid color so
   input tests can locate and click the rendered control across nested displays.
+- Software Wayland headless sessions on KWin using QPainter reuse the private
+  Xvfb backing display for native output capture, with remote servers disabled.
+  Test capture errors use stderr directly so Qt logging filters cannot hide them.
+- KWin 6.8 software sessions nested on X11 use their virtual compositor and a
+  local RFB viewer, avoiding the direct X11 backend's DRI3 requirement. KRFB
+  binds only to loopback for this internal relay; viewer clipboard forwarding
+  is disabled in favor of the existing text/image relay. Only the viewer and
+  libraries missing from the runtime are copied from distro build packages.

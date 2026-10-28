@@ -1,0 +1,17 @@
+#!/usr/bin/bash
+set -euo pipefail
+# The loopback-only relay keeps KWin as compositor without requiring host DRI3.
+export DISPLAY=$HOST_DISPLAY XAUTHORITY=$HOST_XAUTHORITY
+unset WAYLAND_DISPLAY
+viewer_help=$(/usr/bin/vncviewer --help 2>&1 || true)
+if [[ $viewer_help == *ShortcutModifiers* ]]; then
+	shortcut=-ShortcutModifiers=
+else
+	shortcut=-MenuKey=
+fi
+exec /usr/bin/vncviewer -PasswordFile=/etc/plasma/vnc-auth \
+	"$shortcut" \
+	-FullColor=1 -RemoteResize=0 \
+	-AcceptClipboard=0 -SendClipboard=0 -SendPrimary=0 -SetPrimary=0 \
+	-AlertOnFatalError=0 -ReconnectOnError=0 \
+	-geometry "${DISPLAY_WIDTH}x${DISPLAY_HEIGHT}+0+0" 127.0.0.1::5900

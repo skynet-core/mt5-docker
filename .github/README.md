@@ -95,3 +95,11 @@ incomplete or mismatched case sets. Broker artifacts include
 only chart PNGs and tester statistics; raw account responses, terminal logs and
 application screenshots stay out of uploads. NVIDIA hardware tests remain a
 separate local check because standard runners provide no NVIDIA GPU.
+
+Display failures print their case paths and causes in the job log, plus the
+last 80 lines of the runner log on startup or runtime failure. A failed distro
+run still fails the job while its successful cases retain their pass counts.
+On older KWin software renderers, Wayland headless screenshots capture the
+private Xvfb output backing KWin; VNC and web services remain disabled.
+KWin 6.8 software sessions nested on X11 use a viewer of their private loopback
+RFB output, preserving GUI input and the existing clipboard relay without DRI3.

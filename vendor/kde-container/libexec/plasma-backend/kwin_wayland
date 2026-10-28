@@ -21,7 +21,7 @@ done
 unset WAYLAND_DISPLAY DISPLAY QT_QPA_PLATFORM
 args=(--width "$DISPLAY_WIDTH" --height "$DISPLAY_HEIGHT")
 [[ -n ${PLASMA_KWIN_BINARY:-} ]] || args+=(--no-lockscreen)
-if [[ $DISPLAY_MODE == nested ]]; then
+if [[ $DISPLAY_MODE == nested && ${PLASMA_SOFTWARE_NESTED:-0} != 1 ]]; then
     case $HOST_DISPLAY_BACKEND in
         wayland) args+=(--wayland-display "$HOST_WAYLAND_DISPLAY") ;;
         x11)

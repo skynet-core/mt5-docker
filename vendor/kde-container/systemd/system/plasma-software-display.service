@@ -1,5 +1,5 @@
 [Unit]
-Description=Private display for Wayland VNC software rendering
+Description=Private display for Wayland software rendering
 Requires=plasma-dbus.service
 After=plasma-dbus.service
 Before=plasma-session.service

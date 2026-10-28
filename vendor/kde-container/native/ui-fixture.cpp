@@ -36,7 +36,7 @@
 int captureOutput(const QString &destination) {
   auto *screen = QGuiApplication::primaryScreen();
   if (!screen) {
-    qWarning("No compositor output is available");
+    std::fprintf(stderr, "No compositor output is available\n");
     return 1;
   }
   QImage image;
@@ -47,7 +47,8 @@ int captureOutput(const QString &destination) {
   } else {
     QTemporaryFile pixels;
     if (!pixels.open()) {
-      qWarning() << "Cannot open screenshot buffer:" << pixels.errorString();
+      std::fprintf(stderr, "Cannot open screenshot buffer: %s\n",
+                   qPrintable(pixels.errorString()));
       return 1;
     }
     const QRect area = screen->geometry();
@@ -61,7 +62,9 @@ int captureOutput(const QString &destination) {
     QDBusReply<QVariantMap> reply =
         QDBusConnection::sessionBus().call(call, QDBus::Block, 10000);
     if (!reply.isValid()) {
-      qWarning() << "KWin output capture failed:" << reply.error();
+      std::fprintf(stderr, "KWin output capture failed: %s: %s\n",
+                   qPrintable(reply.error().name()),
+                   qPrintable(reply.error().message()));
       return 1;
     }
     const auto attributes = reply.value();
@@ -72,7 +75,7 @@ int captureOutput(const QString &destination) {
         static_cast<QImage::Format>(attributes.value("format").toInt());
     const qint64 size = qint64(stride) * height;
     if (width <= 0 || height <= 0 || stride <= 0 || size > 128 * 1024 * 1024) {
-      qWarning("KWin returned invalid screenshot dimensions");
+      std::fprintf(stderr, "KWin returned invalid screenshot dimensions\n");
       return 1;
     }
     // KWin sends metadata before its worker finishes writing the image FD.
@@ -82,7 +85,7 @@ int captureOutput(const QString &destination) {
            timeout.elapsed() < 10000)
       QThread::msleep(10);
     if (QFileInfo(pixels.fileName()).size() != size || !pixels.seek(0)) {
-      qWarning("KWin did not finish the screenshot buffer");
+      std::fprintf(stderr, "KWin did not finish the screenshot buffer\n");
       return 1;
     }
     const QByteArray bytes = pixels.readAll();
@@ -92,7 +95,8 @@ int captureOutput(const QString &destination) {
     method = "kwin-screenshot2";
   }
   if (image.isNull() || !image.save(destination, "PNG")) {
-    qWarning("Cannot save compositor screenshot");
+    std::fprintf(stderr, "Cannot save compositor screenshot: %s\n",
+                 qPrintable(destination));
     return 1;
   }
   const auto metadata = QJsonDocument(QJsonObject{{"method", method},

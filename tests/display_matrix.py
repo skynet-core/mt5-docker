@@ -123,6 +123,28 @@ def inspect_case(output, distro, backend, mode, host, image_id, run_errors):
         }:
             errors.append("Headless VNC/web services were not verified inactive")
         native_capture = "kwin-screenshot2" if backend == "wayland" else "x11-root"
+        if backend == "wayland" and capture_method == "x11-root":
+            session = read_result(directory / "session.json", errors)
+            backing = report.get("headless_backing_display")
+            if (
+                not isinstance(backing, str)
+                or not re.fullmatch(r":11[01]", backing)
+                or backing != session.get("PLASMA_SOFTWARE_DISPLAY")
+                or any(
+                    session.get(key) != value
+                    for key, value in {
+                        "DISPLAY_BACKEND": "wayland",
+                        "DISPLAY_MODE": "headless",
+                        "HOST_DISPLAY_BACKEND": "none",
+                        "PLASMA_SOFTWARE_CAPTURE": "1",
+                        "XAUTHORITY": "/etc/plasma/Xauthority",
+                    }.items()
+                )
+            ):
+                errors.append(
+                    "Headless X11 capture did not identify its private backing output"
+                )
+            native_capture = "x11-root"
         if capture_method != native_capture:
             errors.append(
                 "Headless screenshot did not use its native compositor capture"
@@ -176,6 +198,7 @@ def inspect_case(output, distro, backend, mode, host, image_id, run_errors):
 def index(output, distros=DISTROS):
     output = Path(output).resolve()
     cases = []
+    run_errors = []
     for distro in distros:
         errors = []
         report = read_result(output / distro / "results.json", errors)
@@ -184,8 +207,10 @@ def index(output, distros=DISTROS):
             r"sha256:[0-9a-f]{64}", image_id
         ):
             errors.append("Distro result has no valid immutable image ID")
-        if report.get("passed") is not True:
-            errors.append("Distro run did not pass")
+        if report.get("passed") is False:
+            run_errors.append(f"{distro}: Distro run did not pass")
+        elif report.get("passed") is not True:
+            errors.append("Distro result has no valid pass/fail status")
         if "os_release" in report and not check_os_release(
             report["os_release"], distro
         ):
@@ -197,7 +222,10 @@ def index(output, distros=DISTROS):
     summary = {
         "expected_cases": len(distros) * 10,
         "passed_cases": sum(case["passed"] for case in cases),
-        "passed": bool(cases) and all(case["passed"] for case in cases),
+        "passed": bool(cases)
+        and not run_errors
+        and all(case["passed"] for case in cases),
+        "run_errors": run_errors,
         "cases": cases,
     }
     output.mkdir(parents=True, exist_ok=True)
@@ -210,7 +238,7 @@ def index(output, distros=DISTROS):
         "| Case | Result | Screenshot | Input proof | Logs |",
         "| --- | --- | --- | --- | --- |",
     ]
-    failures = []
+    failures = [f"- {error}" for error in run_errors]
     for case in cases:
         path = case["path"]
         directory = output / path
@@ -255,5 +283,11 @@ if __name__ == "__main__":
     if len(options.distros) != len(set(options.distros)):
         parser.error("Select each distribution once")
     result = index(options.output, options.distros)
+    print(f"Display matrix: {result['passed_cases']}/{result['expected_cases']} passed")
+    for error in result["run_errors"]:
+        print(f"FAIL run: {error}")
+    for case in result["cases"]:
+        if not case["passed"]:
+            print(f"FAIL {case['path']}: {'; '.join(case['errors'])}")
     print(f"Display evidence: {options.output.resolve() / 'INDEX.md'}")
     raise SystemExit(0 if result["passed"] else 1)

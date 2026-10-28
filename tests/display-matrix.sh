@@ -34,6 +34,7 @@ cleanup() {
 trap cleanup EXIT
 failed=0
 for distro in "${distros[@]}"; do
+	distro_failed=0
 	image=${IMAGE_TAG:-mt5:$distro}
 	fixture_image=${FIXTURE_IMAGE:-mt5:runtime-test-$distro}
 	parent_image=${PARENT_IMAGE:-$image}
@@ -46,16 +47,21 @@ for distro in "${distros[@]}"; do
 		fixture_container=''
 		if ! uv run --locked python tests/runtime.py --image "$image" --parent-image "$parent_image" --fixture "$fixture" \
 			--case "$distro" --capture-startup --output "$output" >>"$log" 2>&1; then
-			failed=1
+			distro_failed=1
 		fi
 	else
 		printf 'Could not export the matching fixture from %s\n' "$fixture_image" >>"$log"
-		failed=1
+		distro_failed=1
 		if [[ -n $fixture_container ]]; then docker rm -fv "$fixture_container" >>"$log" 2>&1 || true; fi
 		fixture_container=''
 	fi
 	mkdir -p "$output/$distro"
 	mv -- "$log" "$output/$distro/runner.log"
+	if ((distro_failed)); then
+		failed=1
+		printf 'Display runner failed for %s; last 80 lines of runner.log:\n' "$distro" >&2
+		tail -n 80 -- "$output/$distro/runner.log" >&2
+	fi
 	printf 'Evidence: %s/%s\n' "$output" "$distro"
 done
 rmdir "$output/_runner" 2>/dev/null || true

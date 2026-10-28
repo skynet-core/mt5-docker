@@ -110,6 +110,10 @@ This covers **40 cases**: four images × two compositors × headless/VNC/web plu
 
 Each run contains an `INDEX.md` and `index.json`, followed by `<distribution>/<backend>/<mode>/`; nested cases add `on-wayland/` or `on-x11/`. Each case retains its screenshot, result metadata, startup/container/service logs and GUI input files. Headless captures use the compositor screenshot API or X11 root pixels, with VNC/web services disabled. The index fails if any expected profile, screenshot, input proof or required log is missing. This display suite uses a test GUI; the separate MT5 suite above verifies actual account login, MT5 charts and expert backtests.
 
+On hosts without a GPU, older KWin versions use QPainter, which cannot provide the ScreenShot2 API. Wayland headless sessions then render through a private Xvfb display; the screenshot captures that actual KWin output, with VNC and web services still disabled. Capture metadata records this backing display, and validation checks its private session configuration. Failed runs print the affected profiles and errors in the CI log while retaining the complete evidence; successful cases keep their individual pass results.
+
+KWin 6.8 requires DRI3 for direct nesting on X11. In software mode, its Wayland session instead renders through a private, authenticated RFB connection to an X11 viewer. KWin still runs the kiosk application; the viewer displays its output and forwards input, while the existing clipboard relay handles text and images. The RFB listener binds only to container loopback. Builds retain only the viewer executable and missing shared libraries, leaving the VNC server packages in the builder.
+
 `--gpu` requires NVIDIA Container Toolkit and records both the EGL probe and KWin's actual renderer. Overlay cases also record the compositor's loaded Qt libraries and reject mixed distro/overlay Qt paths. KWin 6.8's software Wayland backend needs the host's `/dev/udmabuf` device; load the host module with `sudo modprobe udmabuf` if necessary. The privileged launcher exposes that device to the container.
 
 ## Recorded acceptance

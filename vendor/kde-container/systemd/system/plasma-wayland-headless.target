@@ -1,5 +1,5 @@
 [Unit]
 Description=Plasma 6 wayland headless desktop
-Requires=multi-user.target plasma-session.service
-After=multi-user.target plasma-session.service
+Requires=multi-user.target plasma-software-display.service plasma-session.service
+After=multi-user.target plasma-software-display.service plasma-session.service
 AllowIsolate=yes

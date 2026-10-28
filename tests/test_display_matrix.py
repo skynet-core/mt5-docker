@@ -1,7 +1,10 @@
 """The display index must reject missing, mismatched and false GUI evidence."""
 
 import json
+import os
 import shutil
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -179,6 +182,34 @@ class DisplayMatrixTests(unittest.TestCase):
         path.write_text(json.dumps(report))
         self.assertFalse(self.collect()["passed"])
 
+    def test_wayland_headless_x11_capture_requires_a_verified_private_backing(self):
+        directory = self.distro / "wayland/headless"
+        report = json.loads((directory / "results.json").read_text())
+        report.update(capture_method="x11-root", headless_backing_display=":110")
+        (directory / "results.json").write_text(json.dumps(report))
+        session = {
+            "DISPLAY_BACKEND": "wayland",
+            "DISPLAY_MODE": "headless",
+            "HOST_DISPLAY_BACKEND": "none",
+            "PLASMA_SOFTWARE_CAPTURE": "1",
+            "PLASMA_SOFTWARE_DISPLAY": ":110",
+            "XAUTHORITY": "/etc/plasma/Xauthority",
+        }
+        session_file = directory / "session.json"
+        session_file.write_text(json.dumps(session))
+        self.assertTrue(self.collect()["passed"])
+        for key, value in (
+            ("PLASMA_SOFTWARE_CAPTURE", "0"),
+            ("HOST_DISPLAY_BACKEND", "x11"),
+            ("PLASMA_SOFTWARE_DISPLAY", ":0"),
+            ("XAUTHORITY", "/run/host/Xauthority"),
+        ):
+            with self.subTest(key=key):
+                session_file.write_text(json.dumps({**session, key: value}))
+                self.assertFalse(self.collect()["passed"])
+        session_file.unlink()
+        self.assertFalse(self.collect()["passed"])
+
     def test_missing_logs_or_malformed_results_remain_indexed_failures(self):
         (self.distro / "x11/web/services.log").unlink()
         (self.distro / "wayland/vnc/results.json").write_text("invalid json")
@@ -186,6 +217,100 @@ class DisplayMatrixTests(unittest.TestCase):
         self.assertFalse(result["passed"])
         self.assertEqual(len(result["cases"]), 10)
         self.assertEqual(result["passed_cases"], 8)
+
+    def test_cli_prints_the_failed_case_and_cause(self):
+        (self.distro / "results.json").write_text(
+            json.dumps({"passed": False, "image_id": IMAGE_ID})
+        )
+        path = self.distro / "wayland/vnc/results.json"
+        report = json.loads(path.read_text())
+        report.update(passed=False, error="RuntimeError: compositor frame unavailable")
+        path.write_text(json.dumps(report))
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(Path(__file__).with_name("display_matrix.py")),
+                str(self.root),
+                "--distros",
+                "fedora-44",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("Display matrix: 9/10 passed", result.stdout)
+        self.assertIn("FAIL run: fedora-44: Distro run did not pass", result.stdout)
+        self.assertIn("FAIL fedora-44/wayland/vnc:", result.stdout)
+        self.assertIn("RuntimeError: compositor frame unavailable", result.stdout)
+        self.assertTrue((self.root / "index.json").is_file())
+
+    def test_failed_run_remains_a_failure_when_all_case_evidence_passes(self):
+        (self.distro / "results.json").write_text(
+            json.dumps({"passed": False, "image_id": IMAGE_ID})
+        )
+        result = self.collect()
+        self.assertFalse(result["passed"])
+        self.assertEqual(result["passed_cases"], 10)
+        self.assertEqual(result["run_errors"], ["fedora-44: Distro run did not pass"])
+        self.assertIn("Distro run did not pass", (self.root / "INDEX.md").read_text())
+
+    def test_invalid_run_metadata_still_invalidates_every_case(self):
+        for report in (
+            {"passed": True},
+            {"passed": "false", "image_id": IMAGE_ID},
+            {"image_id": IMAGE_ID},
+            [],
+        ):
+            with self.subTest(report=report):
+                (self.distro / "results.json").write_text(json.dumps(report))
+                result = self.collect()
+                self.assertFalse(result["passed"])
+                self.assertEqual(result["passed_cases"], 0)
+
+    def test_runner_initialization_failure_prints_and_retains_its_cause(self):
+        tools = self.root / "tools"
+        tools.mkdir()
+        docker = tools / "docker"
+        docker.write_text(
+            "#!/bin/sh\n"
+            'if [ "$1" = create ]; then echo fixture; fi\n'
+            'if [ "$1" = cp ]; then touch "$3"; fi\n'
+            "exit 0\n"
+        )
+        uv = tools / "uv"
+        uv.write_text(
+            "#!/bin/bash\n"
+            "if [[ $4 == tests/runtime.py ]]; then\n"
+            "  echo 'RuntimeError: parent compositor failed to start' >&2\n"
+            "  exit 1\n"
+            "fi\n"
+            'exec "$TEST_PYTHON" "${@:4}"\n'
+        )
+        docker.chmod(0o755)
+        uv.chmod(0o755)
+        output = self.root / "shell-output"
+        environment = {
+            **os.environ,
+            "PATH": f"{tools}:{os.environ['PATH']}",
+            "TEST_PYTHON": sys.executable,
+            "OUTPUT_DIR": str(output),
+        }
+        result = subprocess.run(
+            [str(Path(__file__).with_name("display-matrix.sh")), "fedora-44"],
+            env=environment,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("Display runner failed for fedora-44", result.stderr)
+        self.assertIn("RuntimeError: parent compositor failed to start", result.stderr)
+        self.assertIn(
+            "RuntimeError: parent compositor failed to start",
+            (output / "fedora-44/runner.log").read_text(),
+        )
+        self.assertTrue((output / "INDEX.md").is_file())
 
 
 if __name__ == "__main__":

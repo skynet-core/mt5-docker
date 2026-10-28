@@ -1,6 +1,7 @@
 """The GUI runner must isolate account services and use the caller's file identity."""
 
 import ast
+import io
 import tempfile
 import unittest
 from pathlib import Path
@@ -12,6 +13,55 @@ from PIL import Image, ImageDraw
 
 
 class RuntimeArgumentsTests(unittest.TestCase):
+    def test_wayland_qpainter_capture_uses_only_its_private_x11_backing(self):
+        session = {
+            "DISPLAY_BACKEND": "wayland",
+            "DISPLAY_MODE": "headless",
+            "PLASMA_SOFTWARE_CAPTURE": "1",
+            "PLASMA_SOFTWARE_DISPLAY": ":110",
+            "WAYLAND_DISPLAY": "wayland-0",
+            "QT_QPA_PLATFORM": "wayland",
+        }
+        image = Image.new("RGB", (800, 600), "white")
+        ImageDraw.Draw(image).rectangle((12, 12, 788, 56), fill=(18, 210, 178))
+        pixels = io.BytesIO()
+        image.save(pixels, "PNG")
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            patch.object(
+                runtime,
+                "execute",
+                side_effect=[
+                    SimpleNamespace(
+                        returncode=0, stdout=b'{"method":"x11-root"}\n', stderr=b""
+                    ),
+                    SimpleNamespace(stdout=pixels.getvalue()),
+                ],
+            ) as execute,
+        ):
+            result = runtime.capture_output(
+                "docker", "test-container", session, Path(directory)
+            )
+        command = execute.call_args_list[0].args
+        self.assertIn("QT_QPA_PLATFORM=xcb", command)
+        self.assertIn("DISPLAY=:110", command)
+        self.assertFalse(any(value.startswith("WAYLAND_DISPLAY=") for value in command))
+        self.assertEqual(session["QT_QPA_PLATFORM"], "wayland")
+        self.assertEqual(result["capture_method"], "x11-root")
+        self.assertEqual(result["headless_backing_display"], ":110")
+
+    def test_capture_failure_preserves_exit_status_when_qt_logs_are_disabled(self):
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            patch.object(
+                runtime,
+                "execute",
+                return_value=SimpleNamespace(returncode=1, stdout=b"", stderr=b""),
+            ),
+            self.assertRaisesRegex(RuntimeError, "status 1: no diagnostic output"),
+        ):
+            runtime.capture_output("docker", "test-container", {}, Path(directory))
+
     def test_capture_metadata_is_an_explicit_stdout_result(self):
         self.assertEqual(
             runtime.capture_metadata(

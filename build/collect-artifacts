@@ -9,6 +9,21 @@ input)
 vnc)
 	install -Dm755 /krfb-build/bin/krfb-virtualmonitor /out/root/usr/bin/krfb-virtualmonitor
 	install -Dm755 /krfb-build/bin/pw.so "/out/root$plugins/krfb/framebuffer/pw.so"
+	viewer=$(command -v vncviewer || command -v xtigervncviewer)
+	install -Dm755 "$(readlink -f -- "$viewer")" /out/root/usr/bin/vncviewer
+	dependencies=$(ldd "$viewer")
+	if [[ $dependencies == *'not found'* ]]; then
+		printf '%s\n' "$dependencies" >&2
+		exit 1
+	fi
+	# Copy only viewer libraries absent from the runtime, excluding server packages.
+	while IFS= read -r library; do
+		if [[ ! -e /desktop-baseline$library ]]; then
+			# Keep the loader's SONAME while resolving merged-/usr directory links.
+			destination="$(readlink -f -- "$(dirname -- "$library")")/${library##*/}"
+			install -Dm755 "$(readlink -f -- "$library")" "/out/root$destination"
+		fi
+	done < <(awk '/=> \// {print $3}' <<<"$dependencies")
 	;;
 *) exit 2 ;;
 esac

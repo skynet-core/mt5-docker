@@ -33,6 +33,81 @@ GPU_LOADER.exec_module(GPU)
 
 
 class RenderingPolicyTests(unittest.TestCase):
+    def test_x11_viewer_passes_shortcut_keys_through_old_and_new_versions(self):
+        helper = SOURCE.parent / "plasma-nested-x11"
+        with tempfile.TemporaryDirectory() as directory:
+            viewer = Path(directory) / "viewer"
+            viewer.write_text(
+                '#!/bin/bash\nif [[ $1 == --help ]]; then printf "%s\\n" "$VIEWER_HELP"; '
+                'else printf "%s\\n" "$@"; printf "DISPLAY=%s\\n" "$DISPLAY"; fi\n'
+            )
+            viewer.chmod(0o755)
+            for help_text, expected in (
+                ("MenuKey", "-MenuKey="),
+                ("ShortcutModifiers", "-ShortcutModifiers="),
+            ):
+                with self.subTest(version=help_text):
+                    result = subprocess.run(
+                        [
+                            "/bin/bash",
+                            "-c",
+                            helper.read_text().replace(
+                                "/usr/bin/vncviewer", str(viewer)
+                            ),
+                        ],
+                        env={
+                            **os.environ,
+                            "VIEWER_HELP": help_text,
+                            "HOST_DISPLAY": ":42",
+                            "HOST_XAUTHORITY": "/tmp/host-auth",
+                            "DISPLAY_WIDTH": "800",
+                            "DISPLAY_HEIGHT": "600",
+                        },
+                        text=True,
+                        capture_output=True,
+                        check=True,
+                    )
+                    self.assertIn(expected, result.stdout.splitlines())
+                    self.assertIn("DISPLAY=:42", result.stdout.splitlines())
+                    self.assertIn("-AcceptClipboard=0", result.stdout.splitlines())
+                    self.assertIn("127.0.0.1::5900", result.stdout.splitlines())
+
+    def test_software_x11_relay_uses_virtual_kwin_without_changing_native_paths(self):
+        adapter = SOURCE.parent / "plasma-backend/kwin_wayland"
+        with tempfile.TemporaryDirectory() as directory:
+            compositor = Path(directory) / "kwin"
+            compositor.write_text('#!/bin/bash\nprintf "%s\\n" "$@"\n')
+            compositor.chmod(0o755)
+            for mode, host, relay, expected, absent in (
+                ("nested", "x11", "1", "--virtual", "--x11-display"),
+                ("nested", "x11", "0", "--x11-display", "--virtual"),
+                ("nested", "wayland", "0", "--wayland-display", "--virtual"),
+                ("headless", "none", "0", "--virtual", "--x11-display"),
+            ):
+                with self.subTest(mode=mode, host=host, relay=relay):
+                    result = subprocess.run(
+                        ["/bin/bash", str(adapter)],
+                        env={
+                            **os.environ,
+                            "DISPLAY_MODE": mode,
+                            "HOST_DISPLAY_BACKEND": host,
+                            "PLASMA_SOFTWARE_NESTED": relay,
+                            "PLASMA_SOFTWARE_CAPTURE": "0",
+                            "PLASMA_NVIDIA_SYNC": "0",
+                            "PLASMA_KWIN_BINARY": str(compositor),
+                            "HOST_DISPLAY": ":42",
+                            "HOST_XAUTHORITY": "/tmp/host-auth",
+                            "HOST_WAYLAND_DISPLAY": "/tmp/host-wayland",
+                            "DISPLAY_WIDTH": "800",
+                            "DISPLAY_HEIGHT": "600",
+                        },
+                        capture_output=True,
+                        text=True,
+                        check=True,
+                    )
+                    self.assertIn(expected, result.stdout.splitlines())
+                    self.assertNotIn(absent, result.stdout.splitlines())
+
     def test_debian_nvidia_remote_fallback_does_not_override_source_compositor(self):
         vendor = Mock()
         for overlay, backend, mode, distro, version, pci, expected in (

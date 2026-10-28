@@ -1,0 +1,21 @@
+--- a/krfb/rfbserver.cpp
++++ b/krfb/rfbserver.cpp
+@@ -16,5 +16,6 @@
+ #include <QSocketNotifier>
+ #include <QtGui/private/qtx11extras_p.h>
++#include <arpa/inet.h>
+ 
+ struct RfbServer::Private
+ {
+@@ -122,6 +123,11 @@
+ 
+         d->screen->port = listeningPort();
+         d->screen->ipv6port = listeningPort();
++        if (qEnvironmentVariableIntValue("PLASMA_SOFTWARE_NESTED") == 1) {
++            // The software X11 viewer is local; never expose its relay socket.
++            d->screen->listenInterface = htonl(INADDR_LOOPBACK);
++            d->screen->ipv6port = 0;
++        }
+ 
+         // Disable/Enable password checking
+         if (passwordRequired()) {

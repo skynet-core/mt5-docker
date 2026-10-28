@@ -67,9 +67,12 @@ COPY build/collect-artifacts /build-support/collect-artifacts
 COPY vendor/kde-container/patches/krfb-low-latency.patch /tmp/krfb-low-latency.patch
 COPY vendor/kde-container/patches/krfb-existing-output.patch /tmp/krfb-existing-output.patch
 COPY vendor/kde-container/patches/krfb-initial-framebuffer.patch /tmp/krfb-initial-framebuffer.patch
-RUN patch --batch --fuzz=0 -d /krfb-source -p1 < /tmp/krfb-low-latency.patch \
+COPY vendor/kde-container/patches/krfb-loopback-relay.patch /tmp/krfb-loopback-relay.patch
+RUN --mount=type=bind,from=desktop-packages,source=/,target=/desktop-baseline,ro \
+    patch --batch --fuzz=0 -d /krfb-source -p1 < /tmp/krfb-low-latency.patch \
     && patch --batch --fuzz=0 -d /krfb-source -p1 < /tmp/krfb-existing-output.patch \
     && patch --batch --fuzz=0 -d /krfb-source -p1 < /tmp/krfb-initial-framebuffer.patch \
+    && patch --batch --fuzz=0 -d /krfb-source -p1 < /tmp/krfb-loopback-relay.patch \
     && cmake -S /krfb-source -B /krfb-build -G Ninja \
         -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF \
     && cmake --build /krfb-build --parallel 2 --target krfb-virtualmonitor krfb_framebuffer_pw \
@@ -139,6 +142,9 @@ COPY --from=kwin-selected /out/root/ /
 RUN chmod +x /init.d/modules/*.sh /usr/local/bin/* /usr/local/libexec/* \
         /usr/local/libexec/plasma-backend/kwin_wayland \
     && command -v kscreen-doctor \
+    && ldd /usr/bin/vncviewer >/tmp/vncviewer.ldd \
+    && ! grep -F 'not found' /tmp/vncviewer.ldd \
+    && rm /tmp/vncviewer.ldd \
     && if [[ -f /usr/lib/systemd/system/NetworkManager.service ]]; then \
         systemctl --root=/ disable NetworkManager.service; \
     fi \

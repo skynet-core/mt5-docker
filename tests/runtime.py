@@ -112,6 +112,17 @@ def capture_metadata(stdout):
 
 def capture_output(runtime, container, session, output):
     """Capture the compositor's real output without starting a remote server."""
+    capture_session = dict(session)
+    backing_display = None
+    if (
+        session.get("DISPLAY_BACKEND") == "wayland"
+        and session.get("DISPLAY_MODE") == "headless"
+        and session.get("PLASMA_SOFTWARE_CAPTURE") == "1"
+    ):
+        # QPainter has no ScreenShot2 API; capture its private Xvfb backing output.
+        backing_display = session["PLASMA_SOFTWARE_DISPLAY"]
+        capture_session.update(DISPLAY=backing_display, QT_QPA_PLATFORM="xcb")
+        capture_session.pop("WAYLAND_DISPLAY", None)
     deadline = time.monotonic() + 25
     while True:
         result = execute(
@@ -120,7 +131,7 @@ def capture_output(runtime, container, session, output):
             "--user=plasma",
             container,
             "env",
-            *[f"{key}={value}" for key, value in session.items()],
+            *[f"{key}={value}" for key, value in capture_session.items()],
             "/usr/local/bin/plasma-ui-fixture",
             "--capture-output",
             "/tmp/display-output.png",
@@ -129,7 +140,11 @@ def capture_output(runtime, container, session, output):
         with (output / "capture.log").open("ab") as log:
             log.write(result.stdout + result.stderr)
         if result.returncode:
-            raise RuntimeError(result.stderr.decode(errors="replace"))
+            detail = (result.stderr or result.stdout).decode(errors="replace").strip()
+            raise RuntimeError(
+                f"Capture helper exited with status {result.returncode}: "
+                f"{detail or 'no diagnostic output; inspect capture.log'}"
+            )
         # Docker's archive API can miss files inside a container's /tmp tmpfs.
         (output / "screenshot.png").write_bytes(
             execute(runtime, "exec", container, "cat", "/tmp/display-output.png").stdout
@@ -142,7 +157,12 @@ def capture_output(runtime, container, session, output):
                 raise
             time.sleep(0.25)
     metadata = capture_metadata(result.stdout)
-    return {"marker_pixels": marker, "capture_method": metadata["method"]}
+    evidence = {"marker_pixels": marker, "capture_method": metadata["method"]}
+    if backing_display:
+        if metadata["method"] != "x11-root":
+            raise RuntimeError("Private X11 backing capture used the wrong display API")
+        evidence["headless_backing_display"] = backing_display
+    return evidence
 
 
 def input_points(image):

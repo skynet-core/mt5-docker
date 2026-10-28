@@ -174,10 +174,14 @@ PYTHON
 	fi
 	local desktop_display=:100
 	[[ $host_x11 != :100 ]] || desktop_display=:101
-	local software_display=:110 software_capture=0
+	local software_display=:110 software_capture=0 software_nested=0
 	[[ $host_x11 != :110 ]] || software_display=:111
-	if [[ $backend == wayland && $software == 1 && ($mode == vnc || $mode == web) && ! -f /etc/plasma/opengl-software-capture ]]; then
+	if [[ $backend == wayland && $software == 1 && ($mode == headless || $mode == vnc || $mode == web) && ! -f /etc/plasma/opengl-software-capture ]]; then
 		software_capture=1
+	fi
+	# KWin 6.8's native X11 backend requires DRI3, unavailable on CPU-only hosts.
+	if [[ $backend == wayland && $software == 1 && $mode == nested && $host_backend == x11 && -f /etc/plasma/opengl-software-capture ]]; then
+		software_nested=1
 	fi
 	rm -f /etc/plasma/Xauthority
 	touch /etc/plasma/Xauthority
@@ -187,9 +191,12 @@ PYTHON
 	chmod 600 /etc/plasma/Xauthority
 
 	rm -f /etc/plasma/vnc-password /etc/plasma/vnc-auth
-	if [[ $mode == vnc || $mode == web ]]; then
+	if [[ $mode == vnc || $mode == web || $software_nested == 1 ]]; then
 		local password=${VNC_PASSWORD:-}
-		if [[ -n ${VNC_PASSWORD_FILE:-} ]]; then
+		if [[ $software_nested == 1 ]]; then
+			password=$(mcookie)
+			password=${password:0:8}
+		elif [[ -n ${VNC_PASSWORD_FILE:-} ]]; then
 			[[ -r $VNC_PASSWORD_FILE ]] || die 'VNC_PASSWORD_FILE is not readable'
 			password=$(cat "$VNC_PASSWORD_FILE")
 		fi
@@ -235,6 +242,7 @@ PYTHON
 		plasma_write_env XAUTHORITY /etc/plasma/Xauthority
 		plasma_write_env PLASMA_X11_DISPLAY "$desktop_display"
 		plasma_write_env PLASMA_SOFTWARE_CAPTURE "$software_capture"
+		plasma_write_env PLASMA_SOFTWARE_NESTED "$software_nested"
 		plasma_write_env PLASMA_SOFTWARE_DISPLAY "$software_display"
 		if [[ -f /etc/plasma/vnc-existing-output ]]; then
 			plasma_write_env PLASMA_VNC_EXISTING_OUTPUT 1
@@ -259,4 +267,10 @@ PYTHON
 	# 501-systemd replaces default.target; 999-exec starts PID 1.
 	export MODULE_SYSTEMD_ENABLED=true
 	export SYSTEMD_INIT_TARGET="plasma-$backend-$mode.target"
+	# A restarted container may regain a usable GPU after an earlier software boot.
+	rm -f /etc/systemd/system/default.target.wants/plasma-nested-x11.service \
+		/etc/systemd/system/plasma-wayland-nested.target.wants/plasma-nested-x11.service
+	if [[ $software_nested == 1 ]]; then
+		export SYSTEMD_INIT_TARGET_WANTS="${SYSTEMD_INIT_TARGET_WANTS:+$SYSTEMD_INIT_TARGET_WANTS,}plasma-nested-x11.service"
+	fi
 }

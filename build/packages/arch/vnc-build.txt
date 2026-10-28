@@ -1,4 +1,5 @@
 patch
+tigervnc
 extra-cmake-modules
 qt6-tools
 qt6-wayland

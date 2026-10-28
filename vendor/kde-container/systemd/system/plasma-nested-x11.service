@@ -1,0 +1,12 @@
+[Unit]
+Description=Software KWin display in the host X11 window
+Requires=plasma-vnc.service plasma-pipewire.service plasma-wireplumber.service
+After=plasma-vnc.service plasma-pipewire.service plasma-wireplumber.service
+
+[Service]
+Type=exec
+User=plasma
+EnvironmentFile=/etc/plasma/session.env
+ExecStart=/usr/local/libexec/plasma-nested-x11
+Restart=always
+RestartSec=3
