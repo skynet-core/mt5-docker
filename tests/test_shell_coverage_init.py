@@ -1,5 +1,7 @@
 """Init modules validate identities/displays using private trees and command doubles."""
 
+import errno
+import json
 import shlex
 import socket
 import unittest
@@ -70,7 +72,8 @@ mcookie() { printf '0123456789abcdef0123456789abcdef\n'; }
 x11vnc() { record x11vnc "$@"; }
 python3() {
     if [[ ${1:-} == - ]]; then
-        command python3 -c $'import errno,os,sys\ndef capability(path,name):\n    number=int(os.environ.get("TEST_CAP_REMOVE_ERROR",str(errno.ENODATA)))\n    if number: raise OSError(number,"synthetic capability result")\nos.removexattr=capability\nexec(compile(sys.stdin.read(),"<capability-fixture>","exec"))'
+        shift
+        command python3 -c $'import errno,json,os,sys\ndef capability(path,name):\n    with open(os.path.join(os.environ["TEST_ROOT"],"capabilities.jsonl"),"a") as stream: stream.write(json.dumps([path,name])+"\\n")\n    number=int(os.environ.get("TEST_CAP_REMOVE_ERROR",str(errno.ENODATA)))\n    if number: raise OSError(number,os.strerror(number),path)\nos.removexattr=capability\nexec(compile(sys.stdin.read(),"<capability-fixture>","exec"))' "$@"
     else command python3 "$@"; fi
 }
 """
@@ -188,7 +191,14 @@ class ShellInitTests(unittest.TestCase):
         gpu.chmod(0o755)
 
     def display(
-        self, *, host="none", modern=False, private_binary=True, extra="", **environment
+        self,
+        *,
+        host="none",
+        modern=False,
+        private_binary=True,
+        extra="",
+        repeat=False,
+        **environment,
     ):
         return self.run_source(
             MODULES / "400-plasma.sh",
@@ -209,7 +219,8 @@ class ShellInitTests(unittest.TestCase):
             ),
             before=DISPLAY_COMMANDS + extra,
             environment={"TEST_HOST": host, "VNC_PASSWORD": "testpass", **environment},
-            after="module_plasma_enabled; module_plasma_run",
+            after="module_plasma_enabled; module_plasma_run"
+            + ("; module_plasma_run" if repeat else ""),
         )
 
     def test_display_profiles_write_the_actual_backend_transport_and_capture_policy(
@@ -299,6 +310,85 @@ class ShellInitTests(unittest.TestCase):
                 self.assertEqual(session["LIBGL_ALWAYS_SOFTWARE"], expected)
                 if values.get("TEST_GPU_VENDOR") == "NVIDIA":
                     self.assertEqual(session["PLASMA_NVIDIA_SYNC"], "1")
+
+    def test_nested_preload_capabilities_are_independent_of_nvidia_egl_sync(self):
+        for host, backend, mode, vendor, software, remove, nvidia in (
+            ("wayland", "wayland", "nested", "AMD", "0", True, "0"),
+            ("wayland", "wayland", "nested", "AMD", "1", True, "0"),
+            ("wayland", "wayland", "nested", "NVIDIA", "1", True, "0"),
+            ("x11", "wayland", "nested", "NVIDIA", "0", True, "1"),
+            ("x11", "wayland", "nested", "AMD", "0", False, "0"),
+            ("x11", "wayland", "nested", "NVIDIA", "1", False, "0"),
+            ("wayland", "x11", "nested", "NVIDIA", "0", False, "0"),
+            ("wayland", "wayland", "headless", "NVIDIA", "0", False, "0"),
+        ):
+            with self.subTest(
+                host=host, backend=backend, mode=mode, vendor=vendor, software=software
+            ):
+                result, _, _, files = self.display(
+                    host=host,
+                    DISPLAY_BACKEND=backend,
+                    DISPLAY_MODE=mode,
+                    LIBGL_ALWAYS_SOFTWARE=software,
+                    TEST_GPU_VENDOR=vendor,
+                    TEST_CAP_REMOVE_ERROR="0" if remove else str(errno.EPERM),
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                calls = [
+                    json.loads(line)
+                    for line in files.get("capabilities.jsonl", b"").splitlines()
+                ]
+                self.assertEqual(len(calls), int(remove))
+                if remove:
+                    self.assertTrue(calls[0][0].endswith("/private/bin/kwin_wayland"))
+                    self.assertEqual(calls[0][1], "security.capability")
+                session = dict(
+                    shlex.split(line)[0].split("=", 1)
+                    for line in files["plasma/session.env"].decode().splitlines()
+                )
+                self.assertEqual(session["PLASMA_NVIDIA_SYNC"], nvidia)
+
+    def test_capability_removal_is_idempotent_for_private_and_distro_kwin(self):
+        for private_binary in (False, True):
+            for error in (0, errno.ENODATA):
+                with self.subTest(private_binary=private_binary, error=error):
+                    result, _, _, files = self.display(
+                        host="wayland",
+                        DISPLAY_MODE="nested",
+                        LIBGL_ALWAYS_SOFTWARE="1",
+                        private_binary=private_binary,
+                        repeat=True,
+                        TEST_CAP_REMOVE_ERROR=str(error),
+                    )
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    calls = [
+                        json.loads(line)
+                        for line in files["capabilities.jsonl"].splitlines()
+                    ]
+                    self.assertEqual(len(calls), 2)
+                    self.assertEqual(calls[0], calls[1])
+                    expected = (
+                        "/private/bin/kwin_wayland"
+                        if private_binary
+                        else "/distro-kwin"
+                    )
+                    self.assertTrue(calls[0][0].endswith(expected))
+                    self.assertEqual(calls[0][1], "security.capability")
+
+    def test_capability_errors_fail_before_publishing_a_session_environment(self):
+        for software in ("0", "1"):
+            with self.subTest(software=software):
+                result, _, _, files = self.display(
+                    host="wayland",
+                    DISPLAY_MODE="nested",
+                    LIBGL_ALWAYS_SOFTWARE=software,
+                    TEST_CAP_REMOVE_ERROR=str(errno.EPERM),
+                )
+                self.assertEqual(result.returncode, 23)
+                self.assertIn("Cannot prepare nested KWin preloads", result.stderr)
+                self.assertIn("Operation not permitted", result.stderr)
+                self.assertNotIn("plasma/session.env", files)
+                self.assertEqual(len(files["capabilities.jsonl"].splitlines()), 1)
 
     def test_invalid_display_requests_fail_before_starting_services(self):
         for values, message in (
@@ -391,7 +481,7 @@ class ShellInitTests(unittest.TestCase):
                 "wayland",
                 "",
                 {"TEST_GPU_VENDOR": "NVIDIA", "TEST_CAP_REMOVE_ERROR": "1"},
-                "Cannot prepare nested NVIDIA",
+                "Cannot prepare nested KWin preloads",
             ),
         ):
             with self.subTest(message=message):

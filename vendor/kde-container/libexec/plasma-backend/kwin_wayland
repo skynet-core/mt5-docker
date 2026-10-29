@@ -21,9 +21,13 @@ done
 unset WAYLAND_DISPLAY DISPLAY QT_QPA_PLATFORM
 args=(--width "$DISPLAY_WIDTH" --height "$DISPLAY_HEIGHT")
 [[ -n ${PLASMA_KWIN_BINARY:-} ]] || args+=(--no-lockscreen)
+pointer_enter=0
 if [[ $DISPLAY_MODE == nested && ${PLASMA_SOFTWARE_NESTED:-0} != 1 ]]; then
     case $HOST_DISPLAY_BACKEND in
-        wayland) args+=(--wayland-display "$HOST_WAYLAND_DISPLAY") ;;
+        wayland)
+            args+=(--wayland-display "$HOST_WAYLAND_DISPLAY")
+            pointer_enter=1
+            ;;
         x11)
             export XAUTHORITY=$HOST_XAUTHORITY
             args+=(--x11-display "$HOST_DISPLAY")
@@ -36,8 +40,13 @@ elif [[ ${PLASMA_SOFTWARE_CAPTURE:-0} == 1 ]]; then
 else
     args+=(--virtual)
 fi
-if [[ ${PLASMA_NVIDIA_SYNC:-0} == 1 ]]; then
+if [[ $pointer_enter == 1 || ${PLASMA_NVIDIA_SYNC:-0} == 1 ]]; then
     export PLASMA_KWIN_ORIGINAL_LD_PRELOAD=${LD_PRELOAD:-}
+fi
+if [[ $pointer_enter == 1 ]]; then
+    export LD_PRELOAD="/usr/local/lib/plasma6/wayland-pointer-enter.so${LD_PRELOAD:+:$LD_PRELOAD}"
+fi
+if [[ ${PLASMA_NVIDIA_SYNC:-0} == 1 ]]; then
     export LD_PRELOAD="/usr/local/lib/plasma6/egl-fence-wait.so${LD_PRELOAD:+:$LD_PRELOAD}"
 fi
 exec "${PLASMA_KWIN_BINARY:-/usr/bin/kwin_wayland}" "${args[@]}" "$@"

@@ -27,6 +27,14 @@ then builds the production image and runs:
    mouse clicks must close Cancel and open File, and Escape must close the menu.
    Web cases use an actual Chromium/noVNC session. Private displays, internal
    networks, empty credentials and fresh Wine volumes isolate every case.
+4. Twelve advanced MT5 pointer profiles per image: two child compositors × both
+   nested host transports × scales 1, 1.25 and 2. They move and resize windows, including server-decorated native Wayland
+   windows, repeat entry/click checks and retain cursor captures against an Arch
+   parent built from the same commit. Its `pointer-parent` target extends `runtime-test` with
+   only `breeze`, so it retains the current patched KRFB framebuffer bridge
+   and stock KWin window decorations. Each distribution remains the tested MT5
+   child; the existing eight-profile input suite still uses its matching parent.
+   This test image adds no dependencies to published images and has no Wine stage.
 
 Before image jobs, the source job requires at least **94% executable-line coverage
 for every maintained Python, Bash and C++ source**, including tests and maintained
@@ -37,6 +45,38 @@ published images. The compiler-audited declaration-only header is shown as N/A
 and pinned by source hash; other missing or empty measurements fail. The combined
 per-file table and raw/JSON/XML/HTML profiles are uploaded as `source-coverage`,
 including after a failed check. Source hashes prevent merging stale profiles.
+
+## Coverage site and README report
+
+[`coverage-publish.yml`](workflows/coverage-publish.yml) publishes the
+[static coverage site](https://skynet-core.github.io/mt5-docker/) after the complete
+image workflow succeeds on the default branch. It accepts reports only from this
+repository's successful default-branch build workflow, checks the downloaded
+artifact digest and validates the per-file 94% gate again before deployment.
+The site includes the full source table, sanitized coverage JSON and the Python
+and native HTML reports. Bash entries link measured line gaps to the exact source
+revision. Raw profiles, shell traces/maps, environment data and execution logs are
+kept out of the public site.
+
+Set the repository's **Settings → Pages → Build and deployment → Source** to
+**GitHub Actions** once. Site preparation has read access; deployment has
+`pages: write` and `id-token: write` in the `github-pages` environment. The README
+job has `contents: write` and updates only the unique
+`<!-- coverage-report:start -->` / `<!-- coverage-report:end -->` block after a
+successful deployment. It regenerates that block against the latest branch before
+each normal push, preserving concurrent edits elsewhere in the README. Bot commits
+use the built-in `GITHUB_TOKEN` and `[skip ci]`; they do not start another image
+build or cancel an active one. Coverage publication has its own concurrency group.
+
+To republish a retained report, run **Publish source coverage** manually and supply
+the successful default-branch image workflow's numeric `run_id`. Reports remain
+attributed to that measured commit and run even when the README has newer edits.
+The Pages actions are pinned to verified release commits. Their required setup and
+permissions follow [GitHub's custom Pages workflow guide](https://docs.github.com/en/pages/getting-started-with-github-pages/using-custom-workflows-with-github-pages);
+the README automation follows GitHub's
+[GITHUB_TOKEN workflow-trigger rules](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/trigger-a-workflow#triggering-a-workflow-from-a-workflow).
+
+## Running source checks locally
 
 Run the same source linters locally with:
 
@@ -131,6 +171,12 @@ Account-free MT5 input evidence is under
 subfolders. It includes screenshots, expected/read-back text, GUI observation,
 phase diagnostics and browser traces. Private parent sockets and Xauthority
 files are excluded from uploads.
+
+Advanced pointer evidence is retained under `artifacts/pointer-matrix/`, with
+private parent sockets and Xauthority excluded. Every image job builds the
+decorated Arch parent as `mt5:ci-pointer-parent`, reusing the Arch production
+cache without adding another cache export. Image jobs allow up to 240 minutes
+for source builds and the complete acceptance suite.
 
 Display failures print their case paths and causes in the job log, plus the
 last 80 lines of the runner log on startup or runtime failure. A failed distro

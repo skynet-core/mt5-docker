@@ -13,6 +13,7 @@ set(COMPAT "${REPOSITORY}/vendor/kde-container/compat")
 find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets DBus Test)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(WAYLAND REQUIRED IMPORTED_TARGET wayland-client)
+pkg_check_modules(WAYLAND_SERVER REQUIRED IMPORTED_TARGET wayland-server)
 pkg_check_modules(XKB REQUIRED IMPORTED_TARGET xkbcommon)
 find_program(WAYLAND_SCANNER wayland-scanner REQUIRED)
 foreach(protocol fake-input ext-data-control-v1 wlr-data-control-unstable-v1)
@@ -92,9 +93,57 @@ add_test(NAME xtest-missing COMMAND "${CMAKE_COMMAND}"
     "-DENVIRONMENT=NATIVE_CASE=xtest-missing" "-DEXPECT=99" "-DMATCH=cannot resolve XTest"
     -P "${CMAKE_CURRENT_SOURCE_DIR}/expect.cmake")
 
+add_library(wayland-pointer-enter SHARED "${COMPAT}/wayland-pointer-enter.cpp")
+target_link_libraries(wayland-pointer-enter PRIVATE PkgConfig::WAYLAND dl)
+add_executable(pointer-enter-unit pointer-enter-unit.cpp)
+target_link_libraries(pointer-enter-unit PRIVATE PkgConfig::WAYLAND dl)
+foreach(scenario original-empty original-absent original-specified)
+    if(scenario STREQUAL "original-empty")
+        set(pointer_environment "PLASMA_KWIN_ORIGINAL_LD_PRELOAD=" "EXPECTED_PRELOAD=")
+    elseif(scenario STREQUAL "original-absent")
+        set(pointer_environment "LD_PRELOAD=$<TARGET_FILE:fake-xtest>"
+            "EXPECTED_PRELOAD=$<TARGET_FILE:fake-xtest>")
+    else()
+        set(pointer_environment "PLASMA_KWIN_ORIGINAL_LD_PRELOAD=$<TARGET_FILE:fake-xtest>"
+            "EXPECTED_PRELOAD=$<TARGET_FILE:fake-xtest>")
+    endif()
+    add_test(NAME pointer-enter-${scenario} COMMAND "${CMAKE_COMMAND}" -E env
+        --unset=LD_PRELOAD --unset=PLASMA_KWIN_ORIGINAL_LD_PRELOAD
+        "NATIVE_CASE=${scenario}" ${pointer_environment} $<TARGET_FILE:pointer-enter-unit>)
+endforeach()
+foreach(scenario restore-failed listener-missing dispatcher-missing clock-failed)
+    if(scenario STREQUAL "restore-failed")
+        set(pointer_environment "PLASMA_KWIN_ORIGINAL_LD_PRELOAD=caller.so;EXPECTED_PRELOAD=caller.so")
+    else()
+        set(pointer_environment "EXPECTED_PRELOAD=")
+    endif()
+    add_test(NAME pointer-enter-${scenario} COMMAND "${CMAKE_COMMAND}"
+        "-DPROGRAM=$<TARGET_FILE:pointer-enter-unit>" "-DCASE="
+        "-DENVIRONMENT=NATIVE_CASE=${scenario};${pointer_environment}"
+        "-DEXPECT=99" "-DMATCH=Plasma Wayland pointer:"
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/expect.cmake")
+endforeach()
+add_executable(pointer-enter-integration pointer-enter-integration.cpp)
+target_link_libraries(pointer-enter-integration PRIVATE
+    PkgConfig::WAYLAND PkgConfig::WAYLAND_SERVER pthread)
+add_test(NAME pointer-enter-wire-baseline COMMAND "${CMAKE_COMMAND}" -E env
+    --unset=LD_PRELOAD --unset=PLASMA_KWIN_ORIGINAL_LD_PRELOAD
+    $<TARGET_FILE:pointer-enter-integration> baseline)
+add_test(NAME pointer-enter-wire-fixed COMMAND "${CMAKE_COMMAND}" -E env
+    "LD_PRELOAD=$<TARGET_FILE:wayland-pointer-enter>"
+    "PLASMA_KWIN_ORIGINAL_LD_PRELOAD=" $<TARGET_FILE:pointer-enter-integration>)
+add_test(NAME pointer-enter-wire-warp-baseline COMMAND "${CMAKE_COMMAND}" -E env
+    --unset=LD_PRELOAD --unset=PLASMA_KWIN_ORIGINAL_LD_PRELOAD
+    $<TARGET_FILE:pointer-enter-integration> warp-baseline)
+add_test(NAME pointer-enter-wire-warp-fixed COMMAND "${CMAKE_COMMAND}" -E env
+    "LD_PRELOAD=$<TARGET_FILE:wayland-pointer-enter>"
+    "PLASMA_KWIN_ORIGINAL_LD_PRELOAD=" $<TARGET_FILE:pointer-enter-integration> warp)
+set_tests_properties(pointer-enter-wire-warp-baseline pointer-enter-wire-warp-fixed
+    PROPERTIES SKIP_RETURN_CODE 77)
+
 add_executable(fixture-unit fixture-unit.cpp)
 target_link_libraries(fixture-unit PRIVATE Qt6::Widgets Qt6::DBus Qt6::Test dl)
-foreach(scenario text text-save-failed images publish-image image-save-failed invalid-args capture-ok capture-invalid-size capture-error capture-save-failed capture-no-screen capture-temp-failed capture-incomplete capture-x11)
+foreach(scenario text text-save-failed images publish-image image-save-failed invalid-args capture-ok capture-cursor capture-cursor-x11 capture-invalid-size capture-error capture-save-failed capture-no-screen capture-temp-failed capture-incomplete capture-x11)
     add_test(NAME fixture-${scenario} COMMAND fixture-unit ${scenario})
 endforeach()
 add_executable(benchmark-unit benchmark-unit.cpp)

@@ -14,10 +14,18 @@ from pathlib import Path
 
 from clipboard import configuration
 from display_matrix import case_path, profiles
-from PIL import Image
+from kwin_driver import KWinDriver
+from PIL import Image, ImageChops
 from playwright.sync_api import sync_playwright
 from rfb import RFBClient
-from runtime import collect, execute, parent_x11, session_identity, start
+from runtime import (
+    capture_metadata,
+    collect,
+    execute,
+    parent_x11,
+    session_identity,
+    start,
+)
 
 
 class BrowserClient:
@@ -25,6 +33,8 @@ class BrowserClient:
         self.driver = sync_playwright().start()
         self.output = output
         self.browser = self.context = self.page = None
+        self.failed_requests = []
+        self.network_change_reload = False
         try:
             self.browser = self.driver.chromium.launch(headless=True)
             self.context = self.browser.new_context(
@@ -32,22 +42,56 @@ class BrowserClient:
             )
             self.context.tracing.start(screenshots=True, snapshots=True)
             self.page = self.context.new_page()
-            self.page.goto(
-                f"http://{host}:{port}/vnc.html?autoconnect=true&resize=off&password=testpass"
-            )
-            self.canvas = self.page.locator("#noVNC_container canvas")
-            self.canvas.wait_for(state="visible", timeout=30000)
-            self.page.wait_for_function(
-                "document.querySelector('#noVNC_container canvas')?.width >= 800"
-            )
-            # The canvas receives frames before noVNC's connecting overlay fades.
-            self.page.locator("#noVNC_transition").wait_for(
-                state="hidden", timeout=30000
-            )
+            self.page.on("requestfailed", self._request_failed)
+            for attempt in range(2):
+                first_failure = len(self.failed_requests)
+                try:
+                    if attempt:
+                        self.page.reload()
+                    else:
+                        self.page.goto(
+                            f"http://{host}:{port}/vnc.html?autoconnect=true&resize=off&password=testpass"
+                        )
+                    self.canvas = self.page.locator("#noVNC_container canvas")
+                    self.canvas.wait_for(state="visible", timeout=30000)
+                    self.page.wait_for_function(
+                        "document.querySelector('#noVNC_container canvas')?.width >= 800"
+                    )
+                    # Frames arrive before noVNC's connecting overlay fades.
+                    self.page.locator("#noVNC_transition").wait_for(
+                        state="hidden", timeout=30000
+                    )
+                    break
+                except Exception:
+                    failures = self.failed_requests[first_failure:]
+                    # Docker bridge changes can cancel Chromium module loads.
+                    if (
+                        attempt
+                        or not failures
+                        or any(
+                            failure["failure"] != "net::ERR_NETWORK_CHANGED"
+                            for failure in failures
+                        )
+                        or not any(
+                            failure["resource_type"] in ("document", "script")
+                            for failure in failures
+                        )
+                    ):
+                        raise
+                    self.network_change_reload = True
         except Exception:
             with contextlib.suppress(Exception):
                 self.close()
             raise
+
+    def _request_failed(self, request):
+        self.failed_requests.append(
+            {
+                "url": request.url.split("?", 1)[0].split("#", 1)[0],
+                "failure": request.failure,
+                "resource_type": request.resource_type,
+            }
+        )
 
     def screenshot(self):
         data = self.canvas.evaluate(
@@ -55,12 +99,15 @@ class BrowserClient:
         )
         return Image.open(io.BytesIO(base64.b64decode(data))).convert("RGB")
 
-    def click(self, x, y):
+    def pointer(self, x, y):
         box = self.canvas.bounding_box()
         width, height = self.canvas.evaluate("canvas => [canvas.width, canvas.height]")
         self.page.mouse.move(
             box["x"] + x * box["width"] / width, box["y"] + y * box["height"] / height
         )
+
+    def click(self, x, y):
+        self.pointer(x, y)
         time.sleep(0.1)
         self.page.mouse.down()
         time.sleep(0.08)
@@ -92,6 +139,21 @@ class BrowserClient:
                     self.page.keyboard.up("Shift")
 
     def close(self):
+        try:
+            (self.output / "browser-startup.json").write_text(
+                json.dumps(
+                    {
+                        "failed_requests": self.failed_requests,
+                        "network_change_reload": self.network_change_reload,
+                    },
+                    indent=2,
+                )
+                + "\n"
+            )
+        finally:
+            self._close_browser()
+
+    def _close_browser(self):
         try:
             if self.context is not None:
                 try:
@@ -173,6 +235,243 @@ class Probe:
             self.states.close()
 
 
+class NestedClient:
+    """Map independent Win32 and compositor geometries, never observed offsets."""
+
+    def __init__(self, parent, driver, probe, window, output, viewport_anchor=None):
+        self.parent, self.driver, self.probe = parent, driver, probe
+        self.window, self.output = window, output
+        self.viewport_anchor = viewport_anchor
+        self.events = []
+
+    def desktop(self):
+        desktop = self.probe.state()["desktop"]
+        if desktop[2] <= 0 or desktop[3] <= 0:
+            raise RuntimeError("MT5 reported an invalid physical desktop")
+        return desktop
+
+    def viewport(self):
+        client = dict(self.window["client"])
+        if self.viewport_anchor:
+            width, height = self.desktop()[2:]
+            scale = self.driver.output["scale"]
+            width, height = width / scale, height / scale
+            if width > client["width"] or height > client["height"]:
+                raise RuntimeError("Private relay viewport is clipped")
+            # TigerVNC centres its framebuffer; Xephyr's active monitor starts at 0,0.
+            if self.viewport_anchor == "center":
+                client["x"] += (client["width"] - width) / 2
+                client["y"] += (client["height"] - height) / 2
+            client.update(width=width, height=height)
+        return client
+
+    def framebuffer_point(self, x, y):
+        width, height = self.desktop()[2:]
+        client = self.viewport()
+        geometry = self.driver.output
+        logical = (
+            client["x"] + x * client["width"] / width,
+            client["y"] + y * client["height"] / height,
+        )
+        framebuffer = [
+            round((logical[index] - geometry["origin"][axis]) * geometry["scale"])
+            for index, axis in enumerate(("x", "y"))
+        ]
+        return framebuffer, logical
+
+    def screenshot(self):
+        width, height = self.desktop()[2:]
+        start, _ = self.framebuffer_point(0, 0)
+        end, _ = self.framebuffer_point(width, height)
+        return self.parent.screenshot().crop((*start, *end)).resize((width, height))
+
+    def pointer(self, x, y):
+        framebuffer, logical = self.framebuffer_point(x, y)
+        self.parent.pointer(*framebuffer)
+        deadline = time.monotonic() + 5
+        while True:
+            observed = self.driver.state()["cursor"]
+            passed = all(
+                abs(observed[axis] - logical[index]) <= 1
+                for index, axis in enumerate(("x", "y"))
+            )
+            if passed or time.monotonic() >= deadline:
+                self.events.append(
+                    {
+                        "client_framebuffer": [x, y],
+                        "parent_framebuffer": framebuffer,
+                        "parent_expected": logical,
+                        "parent_observed": observed,
+                        "passed": passed,
+                    }
+                )
+                (self.output / "parent-pointer.json").write_text(
+                    json.dumps(self.events, indent=2) + "\n"
+                )
+                if not passed:
+                    raise RuntimeError(
+                        "Parent RFB input used incorrect scaled coordinates"
+                    )
+                return
+            time.sleep(0.1)
+
+    def click(self, x, y):
+        # Enter directly at the target; no interior motion may repair a stale click.
+        self.parent.pointer(0, 0)
+        time.sleep(0.1)
+        self.pointer(x, y)
+        framebuffer, _ = self.framebuffer_point(x, y)
+        self.parent.pointer(*framebuffer, 1)
+        time.sleep(0.08)
+        self.parent.pointer(*framebuffer)
+
+    def key(self, keysym, down):
+        self.parent.key(keysym, down)
+
+    def chord(self, modifier, key):
+        self.parent.chord(modifier, key)
+
+    def text(self, value):
+        self.parent.text(value)
+
+
+def capture_parent(runtime, parent, session, destination, cursor):
+    path = "/tmp/mt5-cursor-" + uuid.uuid4().hex + ".png"
+    try:
+        result = execute(
+            runtime,
+            "exec",
+            "--user=plasma",
+            parent,
+            "env",
+            *[f"{key}={value}" for key, value in session.items()],
+            "/usr/local/bin/plasma-ui-fixture",
+            "--capture-output-with-cursor" if cursor else "--capture-output",
+            path,
+        )
+        metadata = capture_metadata(result.stdout)
+        if (
+            metadata["method"] != "kwin-screenshot2"
+            or bool(metadata.get("include_cursor")) != cursor
+        ):
+            raise RuntimeError(
+                "Parent screenshot did not use the requested cursor mode"
+            )
+        destination.write_bytes(execute(runtime, "exec", parent, "cat", path).stdout)
+        return metadata
+    except subprocess.CalledProcessError as error:
+        diagnostic = (error.stdout or b"") + (error.stderr or b"")
+        destination.with_suffix(".log").write_bytes(diagnostic)
+        raise RuntimeError(
+            "Parent capture failed: " + diagnostic.decode(errors="replace").strip()
+        ) from error
+    finally:
+        execute(runtime, "exec", parent, "rm", "-f", path, check=False)
+
+
+def cursor_hotspot(before, after, expected):
+    if before.size != after.size:
+        raise RuntimeError("Cursor screenshots changed output dimensions")
+    difference = ImageChops.difference(before.convert("RGB"), after.convert("RGB"))
+    mask = difference.convert("L").point(lambda value: 255 if value > 16 else 0)
+    bounds = mask.getbbox()
+    if bounds is None:
+        raise RuntimeError(
+            "Compositor screenshot did not contain the cursor at its input position"
+        )
+    if bounds[2] - bounds[0] > 128 or bounds[3] - bounds[1] > 128:
+        raise RuntimeError("Screenshot difference did not isolate a cursor sprite")
+    tip = list(bounds[:2])
+    if any(abs(tip[index] - expected[index]) > 8 for index in range(2)):
+        raise RuntimeError(f"Cursor sprite offset: expected {expected}, observed {tip}")
+    return {
+        "expected": expected,
+        "observed_bounds_origin": tip,
+        "full_difference_bounds": list(bounds),
+        "tolerance": 8,
+        "passed": True,
+    }
+
+
+def capture_cursor(runtime, parent, session, output, logical, geometry):
+    for attempt in range(1, 4):
+        directory = output / f"cursor-attempt-{attempt}"
+        directory.mkdir()
+        before, after, background = [
+            directory / name
+            for name in (
+                "cursor-hidden.png",
+                "cursor-visible.png",
+                "cursor-background.png",
+            )
+        ]
+        capture_parent(runtime, parent, session, before, False)
+        metadata = capture_parent(runtime, parent, session, after, True)
+        capture_parent(runtime, parent, session, background, False)
+        with (
+            Image.open(before) as hidden,
+            Image.open(after) as visible,
+            Image.open(background) as check,
+        ):
+            bounds = (
+                ImageChops.difference(
+                    hidden.convert("RGB"), check.convert("RGB")
+                ).getbbox()
+                if hidden.size == check.size
+                else (0, 0, *hidden.size)
+            )
+            (directory / "scene.json").write_text(
+                json.dumps(
+                    {
+                        "background_stable": bounds is None,
+                        "background_difference_bounds": bounds,
+                    },
+                    indent=2,
+                )
+                + "\n"
+            )
+            if bounds is not None:
+                continue
+            expected = [
+                (logical[index] - geometry["origin"][axis])
+                * visible.size[index]
+                / geometry["logical"][dimension]
+                for index, (axis, dimension) in enumerate(
+                    (("x", "width"), ("y", "height"))
+                )
+            ]
+            cursor = cursor_hotspot(hidden, visible, expected)
+        for path in (before, after, background):
+            (output / path.name).write_bytes(path.read_bytes())
+        cursor.update(attempt=attempt, scene=f"{directory.name}/scene.json")
+        return cursor, metadata
+    raise RuntimeError("Cursor background did not stabilize in three capture attempts")
+
+
+def resized_input(client, probe, runtime, parent, session, output):
+    output.mkdir()
+    size = (
+        (client.window["frame"]["width"] + 80, client.window["frame"]["height"] + 40)
+        if client.viewport_anchor
+        else (1100, 820)
+    )
+    client.window = client.driver.place_window(280, 80, *size)
+    (output / "window.json").write_text(json.dumps(client.window, indent=2) + "\n")
+    pointer = pointer_grid(client, probe, output)
+    state = probe.state()
+    point = control_point(client, probe, state["file_rect"])
+    client.click(*point)
+    wait_state(probe, lambda value: bool(value["menus"]))
+    client.screenshot().save(output / "mouse-menu.png")
+    close_menu(client, probe)
+    client.pointer(*point)
+    _, logical = client.framebuffer_point(*point)
+    cursor, metadata = capture_cursor(
+        runtime, parent, session, output, logical, client.driver.output
+    )
+    return {"passed": True, "pointer": pointer, "cursor": cursor, "capture": metadata}
+
+
 def wait_state(probe, predicate, expected="", timeout=20):
     deadline = time.monotonic() + timeout
     while True:
@@ -184,8 +483,64 @@ def wait_state(probe, predicate, expected="", timeout=20):
         time.sleep(0.2)
 
 
+def close_menu(client, probe):
+    # Escape closes the popup first, then MT5's remaining menu-bar capture.
+    for _ in range(2):
+        client.key(0xFF1B, True)
+        client.key(0xFF1B, False)
+    wait_state(probe, lambda value: not value["menus"] and value["menu_mode"] is False)
+
+
 def center(rectangle):
     return (rectangle[0] + rectangle[2]) // 2, (rectangle[1] + rectangle[3]) // 2
+
+
+def control_point(client, probe, rectangle):
+    x, y = center(rectangle)
+    left, top, width, height = probe.state()["desktop"]
+    image = client.screenshot()
+    return (x - left) * image.width / width, (y - top) * image.height / height
+
+
+def pointer_grid(client, probe, output):
+    image = client.screenshot()
+    state = probe.state()
+    left, top, width, height = state["desktop"]
+    if width <= 0 or height <= 0:
+        raise RuntimeError("MT5 reported an invalid physical desktop")
+    evidence = []
+    destination = output / "pointer.json"
+    # Include pure horizontal/vertical moves: stale axis metadata must fail too.
+    for x, y in ((0.1, 0.1), (0.9, 0.1), (0.9, 0.9), (0.1, 0.9), (0.5, 0.5)):
+        framebuffer = [round(x * (image.width - 1)), round(y * (image.height - 1))]
+        expected = [
+            left + framebuffer[0] * width / image.width,
+            top + framebuffer[1] * height / image.height,
+        ]
+        client.pointer(*framebuffer)
+        deadline = time.monotonic() + 5
+        while True:
+            observed = probe.state()["pointer"]
+            delta = [observed[index] - expected[index] for index in range(2)]
+            matched = all(abs(value) <= 2 for value in delta)
+            if matched or time.monotonic() >= deadline:
+                evidence.append(
+                    {
+                        "framebuffer": framebuffer,
+                        "expected": expected,
+                        "observed": observed,
+                        "delta": delta,
+                        "passed": matched,
+                    }
+                )
+                destination.write_text(json.dumps(evidence, indent=2) + "\n")
+                if not matched:
+                    raise RuntimeError(
+                        f"MT5 pointer offset: expected {expected}, observed {observed}"
+                    )
+                break
+            time.sleep(0.1)
+    return {"passed": True, "points": len(evidence), "evidence": "pointer.json"}
 
 
 def visible_frame(client, destination, timeout=25):
@@ -242,6 +597,8 @@ def exercise(client, probe, output):
     )
     phase("waiting for visible framebuffer")
     visible_frame(client, output / "startup.png")
+    phase("checking physical pointer coordinates")
+    pointer = pointer_grid(client, probe, output)
     edit = max(
         (
             item
@@ -253,7 +610,7 @@ def exercise(client, probe, output):
     expected = "MT5Input-AaZz-0123-" + uuid.uuid4().hex
     assert not any(item.get("matches") for item in probe.state(expected)["controls"])
     phase("focusing company-search edit")
-    client.click(*center(edit["rect"]))
+    client.click(*control_point(client, probe, edit["rect"]))
     wait_state(probe, lambda value: value.get("focus") == edit["hwnd"])
     seed = "MT5Input-seed-456"
     phase("typing initial text")
@@ -288,7 +645,7 @@ def exercise(client, probe, output):
         for item in state["controls"]
         if item.get("cancel") and item["root"] == edit["root"]
     )
-    client.click(*center(button["rect"]))
+    client.click(*control_point(client, probe, button["rect"]))
     wait_state(
         probe,
         lambda value: (
@@ -297,17 +654,16 @@ def exercise(client, probe, output):
     )
     state = wait_state(probe, lambda value: value.get("main_enabled"))
     phase("clicking File menu")
-    client.click(*center(state["file_rect"]))
+    client.click(*control_point(client, probe, state["file_rect"]))
     wait_state(probe, lambda value: bool(value["menus"]))
     client.screenshot().save(output / "mouse-menu.png")
     phase("closing File menu with Escape")
-    client.key(0xFF1B, True)
-    client.key(0xFF1B, False)
-    wait_state(probe, lambda value: not value["menus"])
+    close_menu(client, probe)
     client.screenshot().save(output / "after-input.png")
     phase("passed")
     return {
         "passed": True,
+        "pointer": pointer,
         "mouse": "Company-search edit focused, Cancel closed, File menu opened",
         "keyboard": "Mixed-case text, Ctrl+A replacement and Escape reached MT5",
         "expected": "expected.txt",
@@ -317,6 +673,11 @@ def exercise(client, probe, output):
 
 
 def main(args):
+    scales = getattr(args, "pointer_scales", None)
+    if scales and (set(args.modes) != {"nested"} or not args.parent_image):
+        raise ValueError(
+            "--pointer-scales requires --modes nested and a decorated --parent-image"
+        )
     root = Path(args.output).resolve() / args.case
     root.mkdir(parents=True, exist_ok=False)
     parent_output = root / "parent"
@@ -345,16 +706,29 @@ def main(args):
             ],
             sleep=True,
             gpu=args.gpu,
-            dimensions=(1280, 960),
+            dimensions=(3840, 2160) if scales else (1280, 960),
         )
         parent_client = connect(args.runtime, parent, "vnc", parent_output)
         host_display, auth = parent_x11(args.runtime, parent, parent_output)
-        for backend, mode, host in profiles(args.backends):
+        driver = KWinDriver(args.runtime, parent, parent_output) if scales else None
+        if driver:
+            driver.clear_rules()
+        for scale, backend, mode, host in (
+            (scale, *profile)
+            for scale in scales or [None]
+            for profile in profiles(args.backends)
+        ):
             if mode not in args.modes:
                 continue
-            output = root / case_path(backend, mode, host)
+            output = (
+                root
+                / (f"scale-{scale * 100:g}" if scale else "")
+                / case_path(backend, mode, host)
+            )
             output.mkdir(parents=True)
             name = f"mt5-input-{os.getpid()}-{backend}-{mode}-{host or 'none'}"
+            if scale:
+                name += f"-scale-{scale:g}"
             report = {
                 "backend": backend,
                 "mode": mode,
@@ -363,6 +737,8 @@ def main(args):
             }
             client = probe = None
             try:
+                if driver:
+                    report["parent_output"] = driver.output_scale(scale)
                 extra = [
                     f"--network={network}",
                     "-e",
@@ -435,7 +811,44 @@ def main(args):
                     else connect(args.runtime, name, mode, output)
                 )
                 probe = Probe(args.runtime, name, output)
+                if driver:
+                    driver.require_decoration = (
+                        backend == "wayland" and host == "wayland"
+                    )
+                    viewport_anchor = (
+                        "center"
+                        if session.get("PLASMA_SOFTWARE_NESTED") == "1"
+                        else "top-left"
+                        if backend == "x11" and host == "x11"
+                        else None
+                    )
+                    frame = (
+                        driver.state()["windows"][0]["frame"]
+                        if viewport_anchor
+                        else None
+                    )
+                    size = (frame["width"], frame["height"]) if frame else (1280, 996)
+                    window = driver.place_window(140, 70, *size)
+                    report["window"] = window
+                    client = NestedClient(
+                        parent_client,
+                        driver,
+                        probe,
+                        window,
+                        output,
+                        viewport_anchor=viewport_anchor,
+                    )
+                    report["viewport"] = client.viewport()
                 report["input"] = exercise(client, probe, output)
+                if driver:
+                    report["resized"] = resized_input(
+                        client,
+                        probe,
+                        args.runtime,
+                        parent,
+                        configuration(args.runtime, parent),
+                        output / "resized",
+                    )
                 report["transport"] = (
                     "browser-noVNC"
                     if mode == "web"
@@ -452,7 +865,7 @@ def main(args):
             finally:
                 for resource in (
                     probe,
-                    client if client is not parent_client else None,
+                    client if mode != "nested" else None,
                 ):
                     if resource is not None:
                         try:
@@ -483,7 +896,9 @@ def main(args):
             finally:
                 execute(args.runtime, "rm", "-fv", parent, check=False)
                 execute(args.runtime, "network", "rm", network, check=False)
-    expected_cases = sum(mode in args.modes for _, mode, _ in profiles(args.backends))
+    expected_cases = len(scales or [None]) * sum(
+        mode in args.modes for _, mode, _ in profiles(args.backends)
+    )
     passed = (
         len(reports) == expected_cases
         and bool(reports)
@@ -512,6 +927,7 @@ if __name__ == "__main__":
         "--backends", nargs="+", choices=("wayland", "x11"), default=["wayland", "x11"]
     )
     parser.add_argument("--gpu", action="store_true")
+    parser.add_argument("--pointer-scales", nargs="+", type=float, choices=(1, 1.25, 2))
     parser.add_argument(
         "--modes",
         nargs="+",

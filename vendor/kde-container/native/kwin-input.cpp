@@ -4,6 +4,7 @@
 #include "events.h"
 #include "eventsplugin.h"
 #include "fake-input-client.h"
+#include "framebuffer-geometry.h"
 #include <rfb/rfbproto.h>
 
 #include <KPluginFactory>
@@ -11,6 +12,7 @@
 #include <QGuiApplication>
 #include <QHash>
 #include <QObject>
+#include <QScreen>
 #include <QSocketNotifier>
 #include <QVariant>
 #include <iterator>
@@ -112,9 +114,28 @@ public:
   // KRFB fixes this callback's parameter order.
   // NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
   void handlePointer(int buttonMask, int x, int y) override {
+    const auto captured = PlasmaFramebuffer::current();
+    auto *screen = QGuiApplication::primaryScreen();
+    if (captured.metaType() != QMetaType::fromType<QSize>() || !screen) {
+      qWarning(
+          "KRFB KWin input: capture geometry is unavailable; pointer ignored");
+      return;
+    }
+    const QSize pixels = captured.toSize();
+    const QRect logical = screen->geometry();
+    if (pixels.isEmpty() || logical.isEmpty()) {
+      qWarning("KRFB KWin input: capture geometry is empty; pointer ignored");
+      return;
+    }
+    // RFB uses captured pixels; KWin fake-input uses global logical
+    // coordinates.
+    const QPointF position(
+        logical.x() + qreal(x) * logical.width() / pixels.width(),
+        logical.y() + qreal(y) * logical.height() / pixels.height());
     const auto buttonsState = static_cast<unsigned>(buttonMask);
     org_kde_kwin_fake_input_pointer_motion_absolute(
-        m_input, wl_fixed_from_int(x), wl_fixed_from_int(y));
+        m_input, wl_fixed_from_double(position.x()),
+        wl_fixed_from_double(position.y()));
     // RFB: left, middle, right, wheel up/down/left/right, back, forward.
     static constexpr unsigned buttons[] = {272, 274, 273, 0, 0, 0, 0, 275, 276};
     for (unsigned bit = 0; bit < std::size(buttons); ++bit) {

@@ -7,6 +7,19 @@ compatibility sources. Existing source copyright and license notices are retaine
 The test-only RFB client in ../../tests/rfb.py is copied from the same source commit.
 
 Local changes:
+- Native Wayland nesting forwards the position carried by wl_pointer.enter
+  before subsequent clicks. A scoped compatibility library preserves all twelve
+  current pointer callbacks and the original listener data, including across
+  older distro headers and newer compositor SDKs. Its constructor restores the
+  application's preload environment; nested init removes conflicting executable
+  capabilities for NVIDIA, AMD and software Wayland paths.
+- KRFB publishes its actual captured framebuffer size to the input plugin.
+  Absolute input is converted from those pixels to the output's logical geometry,
+  including its origin, instead of assuming one input pixel per logical unit.
+- The test fixture optionally includes the compositor cursor in ScreenShot2
+  captures. Tests isolate its full-frame difference against unchanged backgrounds.
+- Read-only RFB test clients no longer move the pointer when disconnecting;
+  outstanding buttons and keys are still released.
 - Docker native Wayland nesting requests NVIDIA driver injection automatically
   when the host driver and NVIDIA runtime exist, preserving explicit GPU,
   runtime, CDI and software-rendering choices.

@@ -190,6 +190,17 @@ class RfbProtocolTests(unittest.TestCase):
             client.close()
         self.assertTrue(wire.closed)
 
+    def test_read_only_capture_and_unpressed_motion_do_not_warp_on_disconnect(self):
+        for moved in (False, True):
+            with self.subTest(moved=moved):
+                client, wire, _ = self.client()
+                if moved:
+                    client.pointer(2, 1)
+                wire.sent.clear()
+                client.close()
+                self.assertEqual(wire.sent, [])
+                self.assertTrue(wire.closed)
+
 
 if __name__ == "__main__":
     unittest.main()

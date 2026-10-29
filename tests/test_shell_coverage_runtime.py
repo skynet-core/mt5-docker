@@ -43,10 +43,10 @@ class ShellRuntimeTests(unittest.TestCase):
             bootstrap = root / "environment.sh"
             bootstrap.write_text(
                 f"source {shlex.quote(str(TRACE))}\n"
-                'record() { printf \'%s\\0\' "$@" >> "$TEST_LOG"; printf \'\\n\' >> "$TEST_LOG"; }\n'
+                "record() { { flock -x 9; printf '%s\\0' \"$@\" >&9; printf '\\n' >&9; } 9>> \"$TEST_LOG\"; }\n"
                 "exec() {\n"
                 '  record "$@"\n'
-                '  TEST_CAPTURED_PRELOAD=${LD_PRELOAD:-} LD_PRELOAD= python3 -c \'import json,os; keys="DISPLAY XAUTHORITY WAYLAND_DISPLAY PATH LD_LIBRARY_PATH QT_PLUGIN_PATH QML_IMPORT_PATH QML2_IMPORT_PATH PLASMA_KWIN_BINARY PLASMA_KWIN_INPUT XDG_SESSION_TYPE PLASMA_APP_LD_LIBRARY_PATH PLASMA_APP_QML2_IMPORT_PATH".split(); data={key:os.environ[key] for key in keys if key in os.environ}; data["LD_PRELOAD"]=os.environ["TEST_CAPTURED_PRELOAD"]; json.dump(data,open(os.environ["TEST_ENV_LOG"],"w"))\'\n'
+                '  TEST_CAPTURED_PRELOAD=${LD_PRELOAD:-} LD_PRELOAD= python3 -c \'import json,os; keys="DISPLAY XAUTHORITY WAYLAND_DISPLAY PATH LD_LIBRARY_PATH QT_PLUGIN_PATH QML_IMPORT_PATH QML2_IMPORT_PATH PLASMA_KWIN_BINARY PLASMA_KWIN_INPUT XDG_SESSION_TYPE PLASMA_APP_LD_LIBRARY_PATH PLASMA_APP_QML2_IMPORT_PATH PLASMA_KWIN_ORIGINAL_LD_PRELOAD".split(); data={key:os.environ[key] for key in keys if key in os.environ}; data["LD_PRELOAD"]=os.environ["TEST_CAPTURED_PRELOAD"]; json.dump(data,open(os.environ["TEST_ENV_LOG"],"w"))\'\n'
                 '  exit "${TEST_EXEC_STATUS:-0}"\n'
                 "}\n"
                 "info() { :; }\n"
@@ -128,6 +128,20 @@ class ShellRuntimeTests(unittest.TestCase):
                 if path.is_file() and path not in (script, bootstrap, log, captured)
             }
             return result, commands, final_environment, files
+
+    def test_concurrent_fake_commands_keep_argument_records_atomic(self):
+        payload = "argument with spaces " * 512
+        result, commands, _, _ = self.run_source(
+            ROOT / "init.d/modules/450-mt5.sh",
+            environment={"TEST_RECORD_PAYLOAD": payload},
+            after='for index in {1..32}; do record "$index" "$TEST_RECORD_PAYLOAD" & done; wait',
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(len(commands), 32)
+        self.assertEqual(
+            {tuple(command) for command in commands},
+            {(str(index), payload) for index in range(1, 33)},
+        )
 
     def test_isolated_startup_masks_peripherals_after_oci_and_preserves_requested_gpu(
         self,
@@ -575,6 +589,68 @@ exit 0
         self.assertEqual(result.returncode, 1)
         self.assertIn("already in use", result.stderr)
         self.assertEqual(commands, [])
+
+    def test_pointer_enter_shim_stays_on_native_wayland_nesting_and_keeps_original_preloads(
+        self,
+    ):
+        def setup(root):
+            wait = root / "wait"
+            wait.write_text('#!/bin/bash\nrecord wait "$@"\n')
+            wait.chmod(0o755)
+
+        for mode, host, relay, capture, pointer in (
+            ("nested", "wayland", "0", "0", True),
+            ("nested", "wayland", "0", "1", True),
+            ("nested", "wayland", "1", "0", False),
+            ("nested", "x11", "0", "0", False),
+            ("nested", "x11", "1", "0", False),
+            ("headless", "none", "0", "1", False),
+            ("vnc", "wayland", "0", "0", False),
+            ("web", "wayland", "0", "0", False),
+        ):
+            for nvidia in ("0", "1"):
+                for original in ("", "/user/one.so:/user/two.so"):
+                    with self.subTest(
+                        mode=mode,
+                        host=host,
+                        relay=relay,
+                        nvidia=nvidia,
+                        original=original,
+                    ):
+                        result, commands, environment, _ = self.run_source(
+                            RUNTIME / "plasma-backend/kwin_wayland",
+                            setup=setup,
+                            replacements=(("/usr/local/libexec/plasma-wait", "wait"),),
+                            environment={
+                                "DISPLAY_MODE": mode,
+                                "HOST_DISPLAY_BACKEND": host,
+                                "PLASMA_SOFTWARE_NESTED": relay,
+                                "PLASMA_SOFTWARE_CAPTURE": capture,
+                                "PLASMA_NVIDIA_SYNC": nvidia,
+                            },
+                            before=f"LD_PRELOAD={shlex.quote(original)}\n",
+                        )
+                        self.assertEqual(result.returncode, 0, result.stderr)
+                        self.assertEqual(commands[-1][0], "/usr/bin/kwin_wayland")
+                        expected = []
+                        if nvidia == "1":
+                            expected.append("/usr/local/lib/plasma6/egl-fence-wait.so")
+                        if pointer:
+                            expected.append(
+                                "/usr/local/lib/plasma6/wayland-pointer-enter.so"
+                            )
+                        if original:
+                            expected.append(original)
+                        self.assertEqual(environment["LD_PRELOAD"], ":".join(expected))
+                        if pointer or nvidia == "1":
+                            # Each native constructor restores this before KWin starts Wine/Xwayland.
+                            self.assertEqual(
+                                environment["PLASMA_KWIN_ORIGINAL_LD_PRELOAD"], original
+                            )
+                        else:
+                            self.assertNotIn(
+                                "PLASMA_KWIN_ORIGINAL_LD_PRELOAD", environment
+                            )
 
     def test_mt5_init_reports_failed_configuration(self):
         module = ROOT / "init.d/modules/450-mt5.sh"

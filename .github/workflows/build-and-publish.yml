@@ -121,7 +121,7 @@ jobs:
             --target "$RUNNER_TEMP/mt5-windows" -r build/mt5-mcp-requirements.txt
 
       - name: Validate workflow syntax
-        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 .github/workflows/build-and-publish.yml
+        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
 
       - name: Retain source coverage evidence
         if: always()
@@ -137,7 +137,7 @@ jobs:
     name: ${{ matrix.distro }}
     needs: checks
     runs-on: ubuntu-latest
-    timeout-minutes: 180
+    timeout-minutes: 240
     permissions:
       contents: read
       packages: write
@@ -149,6 +149,7 @@ jobs:
       DISTRO: ${{ matrix.distro }}
       IMAGE: mt5:${{ matrix.distro }}
       FIXTURE_IMAGE: mt5:ci-fixture-${{ matrix.distro }}
+      POINTER_PARENT_IMAGE: mt5:ci-pointer-parent
       KWIN_VARIANT: source
 
     steps:
@@ -250,6 +251,28 @@ jobs:
           tags: ${{ env.FIXTURE_IMAGE }}
           cache-from: type=gha,scope=mt5-${{ matrix.distro }}-${{ env.KWIN_VARIANT }}
 
+      - name: Reclaim SDK build cache when runner space is low
+        run: |
+          free_kib=$(df -Pk "$(docker info --format '{{.DockerRootDir}}')" | awk 'NR==2 {print $4}')
+          if ((free_kib < 20 * 1024 * 1024)); then
+            # Loaded images stay available while unused compiler snapshots are freed.
+            docker buildx prune --all --force
+          fi
+
+      - name: Prepare decorated pointer parent build
+        run: cat Dockerfile.archlinux tests/Dockerfile.pointer-parent.fragment > "$RUNNER_TEMP/Dockerfile.pointer-parent"
+
+      - name: Build and load the decorated Arch pointer parent
+        uses: docker/build-push-action@v7 # v7
+        with:
+          context: .
+          file: ${{ runner.temp }}/Dockerfile.pointer-parent
+          target: pointer-parent
+          platforms: linux/amd64
+          load: true
+          tags: ${{ env.POINTER_PARENT_IMAGE }}
+          cache-from: type=gha,scope=mt5-archlinux-${{ env.KWIN_VARIANT }}
+
       - name: Test every display mode with GUI input and screenshot evidence
         env:
           IMAGE_TAG: ${{ env.IMAGE }}
@@ -270,6 +293,15 @@ jobs:
           uv run --locked python tests/mt5_input.py \
             --image "$IMAGE" --parent-image "$FIXTURE_IMAGE" \
             --case "$DISTRO" --output artifacts/mt5-input
+
+      - name: Verify advanced MT5 pointer behavior with a decorated parent
+        env:
+          PLAYWRIGHT_BROWSERS_PATH: ${{ runner.temp }}/mt5-playwright
+        run: |
+          uv run --locked python tests/mt5_input.py \
+            --image "$IMAGE" --parent-image "$POINTER_PARENT_IMAGE" \
+            --case "$DISTRO" --output artifacts/pointer-matrix \
+            --modes nested --pointer-scales 1 1.25 2
 
       - name: Verify broker login, MCP and expert backtests in all eight modes
         if: steps.policy.outputs.publish == 'true'
@@ -317,6 +349,7 @@ jobs:
             artifacts/smoke/
             artifacts/display-matrix/
             artifacts/mt5-input/
+            artifacts/pointer-matrix/
             artifacts/tested-image-id.txt
             artifacts/broker/*/chart.png
             artifacts/broker/*/summary.json
@@ -327,5 +360,8 @@ jobs:
             !artifacts/mt5-input/**/parent/runtime/**
             !artifacts/mt5-input/**/parent/x11/**
             !artifacts/mt5-input/**/parent/Xauthority
+            !artifacts/pointer-matrix/**/parent/runtime/**
+            !artifacts/pointer-matrix/**/parent/x11/**
+            !artifacts/pointer-matrix/**/parent/Xauthority
           if-no-files-found: warn
           retention-days: 14

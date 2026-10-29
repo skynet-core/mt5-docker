@@ -25,13 +25,34 @@ class GUIThreadInfo(ctypes.Structure):
     ]
 
 
-def focused_control(thread, user=None):
+def thread_state(thread, user=None):
     user = user or ctypes.windll.user32
     query = user.GetGUIThreadInfo
     query.argtypes = (wintypes.DWORD, ctypes.POINTER(GUIThreadInfo))
     query.restype = wintypes.BOOL
     info = GUIThreadInfo(cbSize=ctypes.sizeof(GUIThreadInfo))
-    return info.hwndFocus if query(thread, ctypes.byref(info)) else None
+    if query(thread, ctypes.byref(info)):
+        return {"focus": info.hwndFocus, "menu_mode": bool(info.flags & 0x4)}
+    return {"focus": None, "menu_mode": None}
+
+
+def physical_desktop(user=None):
+    user = user or ctypes.windll.user32
+    awareness = user.SetThreadDpiAwarenessContext
+    awareness.argtypes = (wintypes.HANDLE,)
+    awareness.restype = wintypes.HANDLE
+    if not awareness(ctypes.c_void_p(-4)):
+        raise RuntimeError("Cannot disable observer DPI virtualization")
+    cursor = user.GetPhysicalCursorPos
+    cursor.argtypes = (ctypes.POINTER(wintypes.POINT),)
+    cursor.restype = wintypes.BOOL
+    point = wintypes.POINT()
+    if not cursor(ctypes.byref(point)):
+        raise RuntimeError("Cannot read physical cursor position")
+    return {
+        "pointer": [point.x, point.y],
+        "desktop": [user.GetSystemMetrics(index) for index in (76, 77, 78, 79)],
+    }
 
 
 def edit_text(window, user=None):
@@ -66,14 +87,13 @@ def edit_text(window, user=None):
 
 
 def snapshot(expected="", gui=None, process=None, read_text=edit_text):
-    pointer = None
+    physical = {"pointer": None, "desktop": None}
     read_focus = gui is None
     if gui is None:
-        import win32api
         import win32gui as gui
         import win32process as process
 
-        pointer = win32api.GetCursorPos()
+        physical = physical_desktop()
 
     windows = []
     gui.EnumWindows(
@@ -95,7 +115,7 @@ def snapshot(expected="", gui=None, process=None, read_text=edit_text):
         "menus": [],
         "dialogs": [],
         "controls": [],
-        "pointer": pointer,
+        **physical,
     }
     if main is None:
         return result
@@ -105,9 +125,11 @@ def snapshot(expected="", gui=None, process=None, read_text=edit_text):
         main_rect=gui.GetWindowRect(main),
         main_enabled=bool(gui.IsWindowEnabled(main)),
         foreground=gui.GetForegroundWindow(),
-        focus=focused_control(process.GetWindowThreadProcessId(main)[0])
-        if read_focus
-        else None,
+        **(
+            thread_state(process.GetWindowThreadProcessId(main)[0])
+            if read_focus
+            else {"focus": None, "menu_mode": None}
+        ),
     )
     try:
         valid, rectangle = gui.GetMenuItemRect(main, gui.GetMenu(main), 0)

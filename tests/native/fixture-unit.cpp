@@ -45,6 +45,14 @@ public:
   }
 };
 
+class ControlledGuiApplication : public QGuiApplication {
+public:
+  static QString platformName() {
+    return scenario == "capture-cursor-x11" ? "xcb"
+                                            : QGuiApplication::platformName();
+  }
+};
+
 QDBusMessage QDBusConnection::call(const QDBusMessage &message, QDBus::CallMode,
                                    int) const {
   if (message.interface() != "org.kde.KWin.ScreenShot2" ||
@@ -55,6 +63,8 @@ QDBusMessage QDBusConnection::call(const QDBusMessage &message, QDBus::CallMode,
     return message.createErrorReply("org.kde.Test.Denied", "Synthetic denial");
   const auto arguments = message.arguments();
   assert(arguments.size() == 6);
+  assert(arguments.at(4).toMap().value("include-cursor").toBool() ==
+         (scenario == "capture-cursor"));
   auto descriptor = arguments.at(5).value<QDBusUnixFileDescriptor>();
   QImage pixels(64, 48, QImage::Format_ARGB32);
   pixels.fill(QColor(18, 210, 178));
@@ -71,11 +81,13 @@ QDBusMessage QDBusConnection::call(const QDBusMessage &message, QDBus::CallMode,
 
 #define QApplication FixtureApplication
 #define QTemporaryFile ControlledTemporaryFile
+#define QGuiApplication ControlledGuiApplication
 #define main fixture_application_main
 #include "../../vendor/kde-container/native/ui-fixture.cpp"
 #undef main
 #undef QApplication
 #undef QTemporaryFile
+#undef QGuiApplication
 
 QPushButton *button(QWidget *window, const QString &text) {
   for (auto *candidate : window->findChildren<QPushButton *>())
@@ -120,6 +132,8 @@ int main(int argc, char **argv) {
   QByteArray mode = scenario.startsWith("capture-") ? "--capture-output"
                     : scenario == "publish-image"   ? "--publish-image"
                                                     : "--images";
+  if (scenario.startsWith("capture-cursor"))
+    mode = "--capture-output-with-cursor";
   if (!scenario.startsWith("capture-")) {
     driver = [&] {
       auto *window = QApplication::topLevelWidgets().value(0);
@@ -177,11 +191,26 @@ int main(int argc, char **argv) {
     arguments = 2;
   if (scenario.startsWith("capture-"))
     std::swap(parameters[1], parameters[2]);
+  QTemporaryFile metadata;
+  assert(metadata.open());
+  const int saved = dup(STDOUT_FILENO);
+  assert(saved >= 0 && dup2(metadata.handle(), STDOUT_FILENO) >= 0);
   const int result = fixture_application_main(arguments, parameters);
+  std::fflush(stdout);
+  assert(dup2(saved, STDOUT_FILENO) >= 0);
+  close(saved);
   const bool success = scenario == "capture-ok" || scenario == "capture-x11" ||
+                       scenario == "capture-cursor" ||
                        !scenario.startsWith("capture-");
   assert(result == (scenario == "invalid-args" ? 2 : success ? 0 : 1));
-  if (scenario == "capture-ok")
+  if (scenario == "capture-ok" || scenario == "capture-cursor") {
     assert(!QImage(output).isNull());
+    assert(metadata.seek(0));
+    const auto object = QJsonDocument::fromJson(metadata.readAll()).object();
+    assert(object.value("method") == "kwin-screenshot2");
+    assert(object.contains("include_cursor") == (scenario == "capture-cursor"));
+    assert(object.value("include_cursor").toBool() ==
+           (scenario == "capture-cursor"));
+  }
   return 0;
 }

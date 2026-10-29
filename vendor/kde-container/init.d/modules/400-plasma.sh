@@ -136,18 +136,19 @@ module_plasma_run() {
 	fi
 	chmod 644 /etc/plasma/gpu.json
 	local nvidia_sync=0
-	if [[ $mode == nested && $backend == wayland && $software == 0 ]]; then
-		# A file capability makes the loader ignore the scoped KWin preload.
-		nvidia_sync=$(python3 - <<'PYTHON'
+	if [[ $mode == nested && $backend == wayland ]]; then
+		# File capabilities make the loader ignore the scoped KWin preloads.
+		nvidia_sync=$(python3 - "$host_backend" <<'PYTHON'
 import errno
 import json
 import os
+import sys
 
 with open("/etc/plasma/gpu.json", encoding="utf-8") as stream:
     devices = json.load(stream)["devices"]
 enabled = any(device.get("hardware") and
               device.get("vendor", "").startswith("NVIDIA") for device in devices)
-if enabled:
+if enabled or sys.argv[1] == "wayland":
     binary = "/opt/kwin-6.8.2/bin/kwin_wayland"
     if not os.path.isfile(binary):
         binary = "/usr/bin/kwin_wayland"
@@ -158,7 +159,7 @@ if enabled:
             raise
 print(int(enabled))
 PYTHON
-		) || die 'Cannot prepare nested NVIDIA synchronization'
+		) || die 'Cannot prepare nested KWin preloads'
 	fi
 	chmod 1777 /tmp/.X11-unix
 	# Copy host cookies without binding them to the host's hostname.

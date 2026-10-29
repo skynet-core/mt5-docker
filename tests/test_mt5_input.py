@@ -27,8 +27,41 @@ def visible_image():
 
 
 class ObservationTests(unittest.TestCase):
-    def test_focus_probe_uses_sized_read_only_gui_thread_query(self):
+    def test_cursor_observation_uses_physical_coordinates_and_per_monitor_awareness(
+        self,
+    ):
+        user = Mock()
+        user.SetThreadDpiAwarenessContext.return_value = -2
+
+        def position(pointer):
+            pointer._obj.x, pointer._obj.y = 773, 221
+            return 1
+
+        user.GetPhysicalCursorPos.side_effect = position
+        user.GetSystemMetrics.side_effect = lambda index: {
+            76: -1280,
+            77: 40,
+            78: 3840,
+            79: 2160,
+        }[index]
+        self.assertEqual(
+            mt5_ui_probe.physical_desktop(user),
+            {"pointer": [773, 221], "desktop": [-1280, 40, 3840, 2160]},
+        )
+        with patch.object(ctypes, "windll", SimpleNamespace(user32=user), create=True):
+            self.assertEqual(mt5_ui_probe.physical_desktop()["pointer"], [773, 221])
+        user.SetThreadDpiAwarenessContext.return_value = None
+        with self.assertRaisesRegex(RuntimeError, "virtualization"):
+            mt5_ui_probe.physical_desktop(user)
+        user.SetThreadDpiAwarenessContext.return_value = -4
+        user.GetPhysicalCursorPos.side_effect = None
+        user.GetPhysicalCursorPos.return_value = 0
+        with self.assertRaisesRegex(RuntimeError, "physical cursor"):
+            mt5_ui_probe.physical_desktop(user)
+
+    def test_thread_probe_reads_focus_and_exact_menu_flag_without_injecting_input(self):
         query = Mock()
+        flags = [0]
 
         def inspect(thread, pointer):
             self.assertEqual(thread, 123)
@@ -36,16 +69,32 @@ class ObservationTests(unittest.TestCase):
                 pointer._obj.cbSize, ctypes.sizeof(mt5_ui_probe.GUIThreadInfo)
             )
             pointer._obj.hwndFocus = 202
+            pointer._obj.flags = flags[0]
             return 1
 
         query.side_effect = inspect
         user = SimpleNamespace(GetGUIThreadInfo=query)
-        self.assertEqual(mt5_ui_probe.focused_control(123, user), 202)
+        for value, expected in ((0, False), (4, True), (1, False), (5, True)):
+            with self.subTest(flags=value):
+                flags[0] = value
+                self.assertEqual(
+                    mt5_ui_probe.thread_state(123, user),
+                    {"focus": 202, "menu_mode": expected},
+                )
         with patch.object(ctypes, "windll", SimpleNamespace(user32=user), create=True):
-            self.assertEqual(mt5_ui_probe.focused_control(123), 202)
+            self.assertEqual(
+                mt5_ui_probe.thread_state(123), {"focus": 202, "menu_mode": True}
+            )
         query.side_effect = None
         query.return_value = 0
-        self.assertIsNone(mt5_ui_probe.focused_control(123, user))
+        self.assertEqual(
+            mt5_ui_probe.thread_state(123, user), {"focus": None, "menu_mode": None}
+        )
+        self.assertEqual(
+            query.argtypes,
+            (ctypes.wintypes.DWORD, ctypes.POINTER(mt5_ui_probe.GUIThreadInfo)),
+        )
+        self.assertIs(query.restype, ctypes.wintypes.BOOL)
 
     def test_edit_readback_only_sends_bounded_wm_gettext(self):
         send = Mock()
@@ -136,6 +185,7 @@ class ObservationTests(unittest.TestCase):
                 self.assertEqual(state["foreground"], 100)
                 self.assertEqual(state["pid"], 10)
                 self.assertIsNone(state["focus"])
+                self.assertIsNone(state["menu_mode"])
                 self.assertEqual(state["menus"], [300])
                 self.assertEqual(
                     state["file_rect"],
@@ -186,14 +236,22 @@ class ObservationTests(unittest.TestCase):
                 },
             ),
             patch.object(
-                mt5_ui_probe, "focused_control", return_value=202
-            ) as read_focus,
+                mt5_ui_probe,
+                "thread_state",
+                return_value={"focus": 202, "menu_mode": True},
+            ) as read_thread,
+            patch.object(
+                mt5_ui_probe,
+                "physical_desktop",
+                return_value={"pointer": [321, 123], "desktop": [0, 0, 1280, 960]},
+            ),
         ):
             state = mt5_ui_probe.snapshot(read_text=lambda _window: "")
         self.assertEqual(state["main"], 100)
-        self.assertEqual(state["pointer"], (321, 123))
+        self.assertEqual(state["pointer"], [321, 123])
         self.assertEqual(state["focus"], 202)
-        read_focus.assert_called_once_with(1)
+        self.assertTrue(state["menu_mode"])
+        read_thread.assert_called_once_with(1)
         self.assertTrue(all(not item.get("matches") for item in state["controls"]))
 
     def test_control_destroyed_after_enumeration_is_skipped_without_observer_failure(
@@ -229,6 +287,161 @@ class ObservationTests(unittest.TestCase):
 
 
 class BrowserTransportTests(unittest.TestCase):
+    @staticmethod
+    def browser_fixture():
+        manager = Mock()
+        driver = manager.start.return_value
+        browser = driver.chromium.launch.return_value
+        context = browser.new_context.return_value
+        page = context.new_page.return_value
+        canvas, overlay = Mock(), Mock()
+        page.locator.side_effect = lambda selector: (
+            canvas if selector == "#noVNC_container canvas" else overlay
+        )
+        return manager, driver, browser, context, page, canvas
+
+    def test_known_network_change_reloads_once_and_keeps_sanitized_evidence(self):
+        for stage, resource in (("navigation", "document"), ("canvas", "script")):
+            with self.subTest(stage=stage), tempfile.TemporaryDirectory() as directory:
+                manager, driver, browser, context, page, canvas = self.browser_fixture()
+                operation = page.goto if stage == "navigation" else canvas.wait_for
+
+                def fail_once(
+                    *_args, operation=operation, resource=resource, page=page, **_kwargs
+                ):
+                    if operation.call_count == 1:
+                        page.on.call_args.args[1](
+                            SimpleNamespace(
+                                url="http://private/app/ui.js?password=excluded#fragment",
+                                failure="net::ERR_NETWORK_CHANGED",
+                                resource_type=resource,
+                            )
+                        )
+                        raise RuntimeError("module load was cancelled")
+
+                operation.side_effect = fail_once
+                with patch.object(mt5_input, "sync_playwright", return_value=manager):
+                    client = mt5_input.BrowserClient(6080, Path(directory))
+                page.reload.assert_called_once_with()
+                self.assertTrue(client.network_change_reload)
+                client.close()
+                metadata = json.loads(
+                    (Path(directory) / "browser-startup.json").read_text()
+                )
+                self.assertEqual(
+                    metadata,
+                    {
+                        "network_change_reload": True,
+                        "failed_requests": [
+                            {
+                                "url": "http://private/app/ui.js",
+                                "failure": "net::ERR_NETWORK_CHANGED",
+                                "resource_type": resource,
+                            }
+                        ],
+                    },
+                )
+                context.tracing.start.assert_called_once_with(
+                    screenshots=True, snapshots=True
+                )
+                context.tracing.stop.assert_called_once_with(
+                    path=str(Path(directory) / "browser-trace.zip")
+                )
+                browser.close.assert_called_once_with()
+                driver.stop.assert_called_once_with()
+
+    def test_other_network_failures_and_unrelated_images_never_reload(self):
+        for failures in (
+            (("net::ERR_CONNECTION_REFUSED", "script"),),
+            (("net::ERR_NETWORK_CHANGED_EXTRA", "script"),),
+            ((None, "script"),),
+            (("net::ERR_NETWORK_CHANGED", "image"),),
+            (
+                ("net::ERR_NETWORK_CHANGED", "script"),
+                ("net::ERR_CONNECTION_RESET", "script"),
+            ),
+        ):
+            with (
+                self.subTest(failures=failures),
+                tempfile.TemporaryDirectory() as directory,
+            ):
+                manager, driver, browser, context, page, canvas = self.browser_fixture()
+
+                def rejected(*_args, failures=failures, page=page, **_kwargs):
+                    for failure, resource in failures:
+                        page.on.call_args.args[1](
+                            SimpleNamespace(
+                                url="http://private/module.js?excluded=value",
+                                failure=failure,
+                                resource_type=resource,
+                            )
+                        )
+                    raise RuntimeError("canvas is unavailable")
+
+                canvas.wait_for.side_effect = rejected
+                with (
+                    patch.object(mt5_input, "sync_playwright", return_value=manager),
+                    self.assertRaisesRegex(RuntimeError, "canvas is unavailable"),
+                ):
+                    mt5_input.BrowserClient(6080, Path(directory))
+                page.reload.assert_not_called()
+                metadata = json.loads(
+                    (Path(directory) / "browser-startup.json").read_text()
+                )
+                self.assertFalse(metadata["network_change_reload"])
+                self.assertEqual(len(metadata["failed_requests"]), len(failures))
+                context.tracing.stop.assert_called_once()
+                browser.close.assert_called_once_with()
+                driver.stop.assert_called_once_with()
+
+    def test_second_network_change_is_fatal_without_another_reload(self):
+        with tempfile.TemporaryDirectory() as directory:
+            manager, driver, browser, context, page, canvas = self.browser_fixture()
+
+            def rejected(*_args, **_kwargs):
+                page.on.call_args.args[1](
+                    SimpleNamespace(
+                        url="http://private/app/ui.js",
+                        failure="net::ERR_NETWORK_CHANGED",
+                        resource_type="script",
+                    )
+                )
+                raise RuntimeError(f"network failure {canvas.wait_for.call_count}")
+
+            canvas.wait_for.side_effect = rejected
+            with (
+                patch.object(mt5_input, "sync_playwright", return_value=manager),
+                self.assertRaisesRegex(RuntimeError, "network failure 2"),
+            ):
+                mt5_input.BrowserClient(6080, Path(directory))
+            page.reload.assert_called_once_with()
+            self.assertEqual(canvas.wait_for.call_count, 2)
+            metadata = json.loads(
+                (Path(directory) / "browser-startup.json").read_text()
+            )
+            self.assertTrue(metadata["network_change_reload"])
+            self.assertEqual(len(metadata["failed_requests"]), 2)
+            context.tracing.stop.assert_called_once()
+            browser.close.assert_called_once_with()
+            driver.stop.assert_called_once_with()
+
+    def test_metadata_write_error_still_releases_every_browser_resource(self):
+        with tempfile.TemporaryDirectory() as directory:
+            manager, driver, browser, context, page, _ = self.browser_fixture()
+            with patch.object(mt5_input, "sync_playwright", return_value=manager):
+                client = mt5_input.BrowserClient(6080, Path(directory))
+            with (
+                patch.object(
+                    Path, "write_text", side_effect=OSError("metadata failed")
+                ),
+                self.assertRaisesRegex(OSError, "metadata failed"),
+            ):
+                client.close()
+            context.tracing.stop.assert_called_once()
+            page.screenshot.assert_called_once()
+            browser.close.assert_called_once_with()
+            driver.stop.assert_called_once_with()
+
     def test_initialization_failures_release_partial_resources_and_preserve_the_cause(
         self,
     ):
@@ -293,7 +506,10 @@ class BrowserTransportTests(unittest.TestCase):
 
     def test_evidence_or_browser_close_errors_still_stop_every_browser_resource(self):
         for failure in ("trace", "screenshot", "browser", "driver"):
-            with self.subTest(failure=failure):
+            with (
+                self.subTest(failure=failure),
+                tempfile.TemporaryDirectory() as directory,
+            ):
                 client = object.__new__(mt5_input.BrowserClient)
                 client.context, client.page, client.browser, client.driver = (
                     Mock(),
@@ -301,7 +517,9 @@ class BrowserTransportTests(unittest.TestCase):
                     Mock(),
                     Mock(),
                 )
-                client.output = Path("/private-output")
+                client.output = Path(directory)
+                client.failed_requests = []
+                client.network_change_reload = False
                 operations = {
                     "trace": client.context.tracing.stop,
                     "screenshot": client.page.screenshot,
@@ -523,10 +741,14 @@ class InputState:
         self.failure = failure
         self.startup = True
         self.menus = False
+        self.menu_mode = False
+        self.capture = self.menu_owner = None
+        self.escapes = 0
         self.focused = False
         self.selected = False
         self.buffer = ""
         self.typed = []
+        self.position = [0, 0]
 
     def state(self, expected=""):
         controls = [
@@ -570,6 +792,8 @@ class InputState:
                 ]
             )
         return {
+            "pointer": self.position,
+            "desktop": [0, 0, 1280, 960],
             "main": 100,
             "main_enabled": not self.startup,
             "focus": 202 if self.focused else None,
@@ -577,22 +801,40 @@ class InputState:
             "controls": controls,
             "dialogs": dialogs,
             "menus": [300] if self.menus else [],
+            "menu_mode": None if self.failure == "menu-query" else self.menu_mode,
+            "capture": self.capture,
+            "menu_owner": self.menu_owner,
         }
 
     def screenshot(self):
         return visible_image()
+
+    def pointer(self, x, y):
+        self.position = [x, y]
 
     def click(self, x, y):
         if (x, y) == (450, 315):
             self.startup = self.failure == "cancel"
         elif (x, y) == (17, 10):
             self.menus = self.failure != "click"
+            self.menu_mode = self.menus
+            self.capture = self.menu_owner = 100 if self.menus else None
+            self.escapes = 0
         elif (x, y) == (350, 365):
             self.focused = self.failure != "focus"
 
     def key(self, key, down):
-        if key == 0xFF1B and down and self.failure != "escape":
-            self.menus = False
+        if key == 0xFF1B and down:
+            self.escapes += 1
+            if self.failure == "escape" or (
+                self.failure == "second-escape" and self.escapes == 2
+            ):
+                return
+            if self.menus:
+                self.menus = False
+            else:
+                self.menu_mode = False
+                self.capture = self.menu_owner = None
 
     def chord(self, _modifier, key):
         if key == ord("a") and self.failure != "modifier":
@@ -606,6 +848,76 @@ class InputState:
 
 
 class InputEffectTests(unittest.TestCase):
+    def test_hidden_popup_still_owns_menu_capture_until_second_escape(self):
+        state = InputState()
+        state.click(17, 10)
+        state.key(0xFF1B, True)
+        state.key(0xFF1B, False)
+        after_popup = state.state()
+        self.assertEqual(after_popup["menus"], [])
+        self.assertTrue(after_popup["menu_mode"])
+        self.assertEqual(after_popup["capture"], 100)
+        self.assertEqual(after_popup["menu_owner"], 100)
+        state.key(0xFF1B, True)
+        state.key(0xFF1B, False)
+        after_menu = state.state()
+        self.assertFalse(after_menu["menu_mode"])
+        self.assertIsNone(after_menu["capture"])
+        self.assertIsNone(after_menu["menu_owner"])
+
+    def test_pointer_grid_covers_axes_scale_and_constant_offset_failure(self):
+        for desktop in ([0, 0, 1280, 960], [-100, 40, 2560, 1920]):
+            with (
+                self.subTest(desktop=desktop),
+                tempfile.TemporaryDirectory() as directory,
+            ):
+                client = Mock()
+                client.screenshot.return_value = visible_image()
+                point = [0, 0]
+                client.pointer.side_effect = lambda x, y, point=point, desktop=desktop: (
+                    point.__setitem__(
+                        slice(None),
+                        [
+                            round(desktop[0] + x * desktop[2] / 1280),
+                            round(desktop[1] + y * desktop[3] / 960),
+                        ],
+                    )
+                )
+                probe = Mock()
+                probe.state.side_effect = lambda point=point, desktop=desktop: {
+                    "pointer": point.copy(),
+                    "desktop": desktop,
+                }
+                result = mt5_input.pointer_grid(client, probe, Path(directory))
+                self.assertTrue(result["passed"])
+                self.assertEqual(result["points"], 5)
+                samples = json.loads((Path(directory) / "pointer.json").read_text())
+                self.assertEqual(
+                    samples[0]["framebuffer"][1], samples[1]["framebuffer"][1]
+                )
+                self.assertEqual(
+                    samples[1]["framebuffer"][0], samples[2]["framebuffer"][0]
+                )
+        with tempfile.TemporaryDirectory() as directory:
+            client = Mock()
+            client.screenshot.return_value = visible_image()
+            probe = Mock()
+            probe.state.return_value = {
+                "pointer": [800, 300],
+                "desktop": [0, 0, 1280, 960],
+            }
+            with (
+                patch.object(mt5_input.time, "monotonic", side_effect=[0, 6]),
+                self.assertRaisesRegex(RuntimeError, "pointer offset"),
+            ):
+                mt5_input.pointer_grid(client, probe, Path(directory))
+            self.assertFalse(
+                json.loads((Path(directory) / "pointer.json").read_text())[0]["passed"]
+            )
+            probe.state.return_value["desktop"][2] = 0
+            with self.assertRaisesRegex(RuntimeError, "invalid physical desktop"):
+                mt5_input.pointer_grid(client, probe, Path(directory))
+
     def clock(self):
         values = iter(range(10000))
         return lambda: next(values)
@@ -629,6 +941,10 @@ class InputEffectTests(unittest.TestCase):
             self.assertEqual(state.buffer, (output / "expected.txt").read_text())
             self.assertFalse(state.startup)
             self.assertFalse(state.menus)
+            self.assertFalse(state.menu_mode)
+            self.assertIsNone(state.capture)
+            self.assertIsNone(state.menu_owner)
+            self.assertEqual(state.escapes, 2)
             for name in (
                 "startup.png",
                 "mouse-menu.png",
@@ -645,6 +961,8 @@ class InputEffectTests(unittest.TestCase):
             "cancel",
             "click",
             "escape",
+            "second-escape",
+            "menu-query",
             "readback",
         ):
             with (
@@ -656,6 +974,15 @@ class InputEffectTests(unittest.TestCase):
             ):
                 state = InputState(failure)
                 mt5_input.exercise(state, state, Path(directory))
+            if failure == "second-escape":
+                self.assertFalse(state.menus)
+                self.assertTrue(state.menu_mode)
+                self.assertEqual(state.capture, 100)
+                self.assertEqual(state.menu_owner, 100)
+                self.assertEqual(state.escapes, 2)
+            if failure == "menu-query":
+                self.assertFalse(state.menu_mode)
+                self.assertIsNone(state.state()["menu_mode"])
 
     def test_waiting_retries_and_rejects_unresponsive_state(self):
         probe = Mock()

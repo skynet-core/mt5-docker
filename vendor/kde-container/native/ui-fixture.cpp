@@ -33,7 +33,7 @@
 #include <functional>
 #include <qnamespace.h>
 
-int captureOutput(const QString &destination) {
+int captureOutput(const QString &destination, bool includeCursor = false) {
   auto *screen = QGuiApplication::primaryScreen();
   if (!screen) {
     std::fprintf(stderr, "No compositor output is available\n");
@@ -42,6 +42,11 @@ int captureOutput(const QString &destination) {
   QImage image;
   QString method;
   if (QGuiApplication::platformName() == "xcb") {
+    if (includeCursor) {
+      std::fprintf(stderr,
+                   "Cursor capture requires the Wayland screenshot API\n");
+      return 1;
+    }
     image = screen->grabWindow(0).toImage();
     method = "x11-root";
   } else {
@@ -57,7 +62,8 @@ int captureOutput(const QString &destination) {
         "org.kde.KWin.ScreenShot2", "CaptureArea");
     call.setArguments(
         {area.x(), area.y(), uint(area.width()), uint(area.height()),
-         QVariantMap{{"include-cursor", false}, {"hide-caller-windows", false}},
+         QVariantMap{{"include-cursor", includeCursor},
+                     {"hide-caller-windows", false}},
          QVariant::fromValue(QDBusUnixFileDescriptor(pixels.handle()))});
     QDBusReply<QVariantMap> reply =
         QDBusConnection::sessionBus().call(call, QDBus::Block, 10000);
@@ -99,10 +105,12 @@ int captureOutput(const QString &destination) {
                  qPrintable(destination));
     return 1;
   }
-  const auto metadata = QJsonDocument(QJsonObject{{"method", method},
-                                                  {"width", image.width()},
-                                                  {"height", image.height()}})
-                            .toJson(QJsonDocument::Compact);
+  QJsonObject attributes{
+      {"method", method}, {"width", image.width()}, {"height", image.height()}};
+  if (includeCursor)
+    attributes.insert("include_cursor", true);
+  const auto metadata =
+      QJsonDocument(attributes).toJson(QJsonDocument::Compact);
   // Machine-readable results must survive QT_LOGGING_RULES disabling qInfo.
   std::printf("%s\n", metadata.constData());
   std::fflush(stdout);
@@ -112,8 +120,13 @@ int captureOutput(const QString &destination) {
 int main(int argc, char **argv) {
   QApplication app(argc, argv);
   QGuiApplication::setDesktopFileName("plasma-ui-fixture");
-  if (argc == 3 && QString::fromLocal8Bit(argv[1]) == "--capture-output")
-    return captureOutput(QString::fromLocal8Bit(argv[2]));
+  if (argc == 3) {
+    const QString option = QString::fromLocal8Bit(argv[1]);
+    if (option == "--capture-output" ||
+        option == "--capture-output-with-cursor")
+      return captureOutput(QString::fromLocal8Bit(argv[2]),
+                           option == "--capture-output-with-cursor");
+  }
   const bool publishImage =
       argc == 3 && QString::fromLocal8Bit(argv[2]) == "--publish-image";
   const bool images =

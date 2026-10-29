@@ -24,6 +24,7 @@ class RFBClient:
         self.pending = bytearray()
         self.held_keys = set()
         self.position = (0, 0)
+        self.buttons = 0
         assert self.read(12).startswith(b"RFB 003."), "No RFB greeting"
         self.send(b"RFB 003.008\n")
         methods = self.read(self.read(1)[0])
@@ -81,6 +82,7 @@ class RFBClient:
 
     def pointer(self, x, y, buttons=0):
         self.position = (int(x), int(y))
+        self.buttons = buttons
         self.send(struct.pack(">BBHH", 5, buttons, *self.position))
 
     def click(self, x, y):
@@ -136,6 +138,7 @@ class RFBClient:
         try:
             for keysym in self.held_keys.copy():
                 self.key(keysym, False)
-            self.pointer(*self.position)
+            if self.buttons:
+                self.pointer(*self.position)
         finally:
             self.connection.close()

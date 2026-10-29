@@ -53,6 +53,7 @@ COPY vendor/kde-container/compat/ /src/compat/
 COPY vendor/kde-container/test/egl-fence-stub.cpp vendor/kde-container/test/egl-fence-test.cpp /src/tests/
 RUN c++ -shared -fPIC -O2 /src/compat/xtest-paced.cpp -ldl -o /xtest-paced.so \
     && c++ -shared -fPIC -O2 /src/compat/egl-fence-wait.cpp -ldl -o /egl-fence-wait.so \
+    && c++ -shared -fPIC -O2 /src/compat/wayland-pointer-enter.cpp -lwayland-client -ldl -o /wayland-pointer-enter.so \
     && mkdir /fake-egl \
     && c++ -shared -fPIC -O2 /src/tests/egl-fence-stub.cpp -pthread -o /fake-egl/libEGL.so.1 \
     && c++ -O2 /src/tests/egl-fence-test.cpp -ldl -o /test-egl-fence \
@@ -63,6 +64,7 @@ COPY build/packages/fedora/vnc-build.txt /build-support/packages/vnc-build.txt
 RUN /build-support/install-packages vnc-build
 COPY build/collect-artifacts /build-support/collect-artifacts
 COPY vendor/kde-container/patches/krfb-low-latency.patch /tmp/krfb-low-latency.patch
+COPY vendor/kde-container/native/framebuffer-geometry.h /krfb-source/krfb/framebuffer-geometry.h
 COPY vendor/kde-container/patches/krfb-existing-output.patch /tmp/krfb-existing-output.patch
 COPY vendor/kde-container/patches/krfb-initial-framebuffer.patch /tmp/krfb-initial-framebuffer.patch
 COPY vendor/kde-container/patches/krfb-loopback-relay.patch /tmp/krfb-loopback-relay.patch
@@ -90,7 +92,7 @@ COPY vendor/kde-container/config/ /etc/xdg/
 COPY config/menus/ /etc/xdg/menus/
 COPY --from=input-build /out/root/ /
 COPY --from=vnc-build /out/root/ /
-COPY --from=compat-build /xtest-paced.so /egl-fence-wait.so /usr/local/lib/plasma6/
+COPY --from=compat-build /xtest-paced.so /egl-fence-wait.so /wayland-pointer-enter.so /usr/local/lib/plasma6/
 # DISTRO_KWIN_RUNTIME
 # DISTRO_X11_RUNTIME
 # DISTRO_RUNTIME_CONFIG
