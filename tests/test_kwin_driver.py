@@ -8,7 +8,6 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import patch
 
 import kwin_driver
@@ -60,14 +59,16 @@ class Desktop:
         self.acknowledgements = 0
         self.silent = False
         self.journal_empty_once = False
+        self.journal_results = []
+        self.journal_checks = []
         self.invalid_state = None
         self.invalid_json = False
         self.layouts = [display()]
 
     def result(self, value=b""):
-        return SimpleNamespace(returncode=0, stdout=value, stderr=b"")
+        return subprocess.CompletedProcess((), 0, stdout=value, stderr=b"")
 
-    def __call__(self, *arguments, **_options):
+    def __call__(self, *arguments, **options):
         self.calls.append(arguments)
         if "python3" in arguments:
             index = arguments.index("-c")
@@ -89,6 +90,12 @@ class Desktop:
                 return self.result(json.dumps(value).encode())
             return self.result()
         if "journalctl" in arguments:
+            self.journal_checks.append(options.get("check", True))
+            if self.journal_results:
+                result = self.journal_results.pop(0)
+                if options.get("check", True):
+                    result.check_returncode()
+                return result
             if self.failure == "journal":
                 raise OSError("private journal failed")
             if self.silent or self.journal_empty_once:
@@ -296,6 +303,75 @@ class PrivateDriverTests(unittest.TestCase):
             self.assertEqual(
                 len(list(Path(directory).glob("MT5_PRIVATE_STATE_*.json"))), 2
             )
+            sleep.assert_called_once_with(0.1)
+
+    def test_empty_journal_exit_one_waits_for_async_kwin_tag(self):
+        with tempfile.TemporaryDirectory() as directory:
+            driver, desktop = self.create(directory)
+            desktop.journal_results = [
+                subprocess.CompletedProcess(("journalctl",), 1, b"", b"")
+            ]
+            with (
+                patch.object(kwin_driver, "execute", side_effect=desktop),
+                patch.object(kwin_driver.time, "sleep") as sleep,
+            ):
+                state = driver.state()
+            self.assertEqual(state["cursor"], desktop.cursor)
+            self.assertEqual(desktop.journal_checks, [False, False])
+            self.assertEqual(desktop.tags, desktop.unloaded)
+            self.assertFalse(list((Path(directory) / "runtime").glob("*.js")))
+            self.assertEqual(
+                len(list(Path(directory).glob("MT5_PRIVATE_STATE_*.json"))), 1
+            )
+            sleep.assert_called_once_with(0.1)
+
+    def test_journal_errors_are_fatal_instead_of_retried_as_empty_matches(self):
+        for code, stdout, stderr in (
+            (1, b"", b"Permission denied\n"),
+            (1, b"-- No entries --\n", b""),
+            (1, b"unexpected journal output\n", b""),
+            (2, b"", b""),
+        ):
+            with (
+                self.subTest(code=code, stdout=stdout, stderr=stderr),
+                tempfile.TemporaryDirectory() as directory,
+            ):
+                driver, desktop = self.create(directory)
+                desktop.journal_results = [
+                    subprocess.CompletedProcess(("journalctl",), code, stdout, stderr)
+                ]
+                with (
+                    patch.object(kwin_driver, "execute", side_effect=desktop),
+                    patch.object(kwin_driver.time, "sleep") as sleep,
+                    self.assertRaises(subprocess.CalledProcessError) as failure,
+                ):
+                    driver.state()
+                self.assertEqual(failure.exception.returncode, code)
+                self.assertEqual(failure.exception.output, stdout)
+                self.assertEqual(failure.exception.stderr, stderr)
+                sleep.assert_not_called()
+                self.assertEqual(desktop.tags, desktop.unloaded)
+                self.assertFalse(list((Path(directory) / "runtime").glob("*.js")))
+                self.assertFalse(list(Path(directory).glob("MT5_PRIVATE_STATE_*.json")))
+
+    def test_empty_exit_one_until_deadline_fails_and_cleans_up_loaded_script(self):
+        with tempfile.TemporaryDirectory() as directory:
+            driver, desktop = self.create(directory)
+            desktop.journal_results = [
+                subprocess.CompletedProcess(("journalctl",), 1, b"", b"")
+                for _ in range(2)
+            ]
+            with (
+                patch.object(kwin_driver, "execute", side_effect=desktop),
+                patch.object(kwin_driver.time, "monotonic", side_effect=[0, 1, 11]),
+                patch.object(kwin_driver.time, "sleep") as sleep,
+                self.assertRaisesRegex(RuntimeError, "no tagged"),
+            ):
+                driver.state()
+            self.assertEqual(desktop.journal_checks, [False, False])
+            self.assertEqual(desktop.tags, desktop.unloaded)
+            self.assertFalse(list((Path(directory) / "runtime").glob("*.js")))
+            self.assertFalse(list(Path(directory).glob("MT5_PRIVATE_STATE_*.json")))
             sleep.assert_called_once_with(0.1)
 
     def test_script_load_run_journal_or_unload_failures_remove_shared_javascript(self):

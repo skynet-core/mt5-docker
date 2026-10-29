@@ -188,7 +188,7 @@ class KWinDriver:
             self.dbus(f"/Scripting/Script{identifier}", "run")
             deadline = time.monotonic() + 10
             while True:
-                log = execute(
+                journal = execute(
                     self.runtime,
                     "exec",
                     self.container,
@@ -200,7 +200,14 @@ class KWinDriver:
                     "cat",
                     "-g",
                     tag,
-                ).stdout.decode()
+                    check=False,
+                )
+                # An asynchronous tag may not have reached journald yet.
+                if not (
+                    journal.returncode == 1 and not journal.stdout and not journal.stderr
+                ):
+                    journal.check_returncode()
+                log = journal.stdout.decode()
                 line = next(
                     (
                         line.split(tag + " ", 1)[1]
