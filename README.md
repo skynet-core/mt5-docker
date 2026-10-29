@@ -234,7 +234,11 @@ The launcher discovers the host Wayland/X11 socket and Xauthority cookie. `HOST_
 
 VNC passwords are limited to eight printable ASCII characters by the protocol. `VNC_PASSWORD_FILE` mounts a private password file. `VNC_PORT`, `WEB_PORT`, and `BIND_ADDRESS` control the host binding; the default address is `127.0.0.1`.
 
-KWin tests actual EGL/GBM rendering before selecting hardware acceleration. `bin/mt5-run -e LIBGL_ALWAYS_SOFTWARE=1` forces software rendering. For an NVIDIA host configured with NVIDIA Container Toolkit, pass `--gpus all` to `bin/mt5-run`. The nested NVIDIA fence fix is scoped to KWin; WebView2 uses software rendering. The Debian/Ubuntu source variant builds KWin 6.8.2 with a matching Qt/KF stack under `/opt/kwin-6.8.2`, enabling the normal GPU path in Wayland VNC/web modes. Debian's distro variant uses software capture for NVIDIA VNC/web with its older KWin. Native KRFB, clipboard helpers and kiosk applications retain their distro Qt libraries. Arch's removed X11 compositor is built separately from pinned KWin-X11 sources, with compilers excluded from the final image.
+The startup GPU probe tests EGL/GBM rendering on available devices; KWin selects its rendering GPU separately. `bin/mt5-run -e LIBGL_ALWAYS_SOFTWARE=1` forces software rendering.
+
+Docker native Wayland nesting automatically adds `--gpus all` when the host NVIDIA driver and NVIDIA Container Toolkit runtime are available. This supplies the driver libraries needed to exchange frames with an NVIDIA host compositor; access to an AMD GPU alone can otherwise leave the nested window black. Explicit GPU, runtime, CDI and software-rendering arguments take precedence. For other modes on an NVIDIA host configured with NVIDIA Container Toolkit, pass `--gpus all` to `bin/mt5-run`.
+
+The nested NVIDIA fence fix is scoped to KWin; WebView2 uses software rendering. The Debian/Ubuntu source variant builds KWin 6.8.2 with a matching Qt/KF stack under `/opt/kwin-6.8.2`, enabling the normal GPU path in Wayland VNC/web modes. Debian's distro variant uses software capture for NVIDIA VNC/web with its older KWin. Native KRFB, clipboard helpers and kiosk applications retain their distro Qt libraries. Arch's removed X11 compositor is built separately from pinned KWin-X11 sources, with compilers excluded from the final image.
 
 ```sh
 # With IMAGE_TAG, CONTAINER_NAME and MT5_VOLUME selected as above:

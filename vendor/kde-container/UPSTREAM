@@ -7,6 +7,9 @@ compatibility sources. Existing source copyright and license notices are retaine
 The test-only RFB client in ../../tests/rfb.py is copied from the same source commit.
 
 Local changes:
+- Docker native Wayland nesting requests NVIDIA driver injection automatically
+  when the host driver and NVIDIA runtime exist, preserving explicit GPU,
+  runtime, CDI and software-rendering choices.
 - Clipboard relay filters X11 selection negotiation targets (TARGETS, MULTIPLE,
   TIMESTAMP and SAVE_TARGETS) before reading or forwarding data. Their atoms and
   timestamps belong to one X server and are not transferable MIME content.

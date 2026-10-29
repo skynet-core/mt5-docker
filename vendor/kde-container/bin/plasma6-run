@@ -72,6 +72,28 @@ if [[ $mode == nested ]]; then
 	if [[ $host_backend != x11 && -S $wayland_socket ]]; then
 		args+=(--mount "type=bind,source=$wayland_socket,target=/run/host/wayland,readonly"
 			-e HOST_WAYLAND_DISPLAY=/run/host/wayland)
+		if [[ $engine == docker && $backend != x11 ]]; then
+			# NVIDIA Wayland buffers need the matching driver libraries, not just devices.
+			auto_gpu=1
+			for option in "$@"; do
+				case $option in
+				--gpus | --gpus=* | --runtime | --runtime=* | *nvidia.com/gpu=* | \
+					LIBGL_ALWAYS_SOFTWARE=1 | --env=LIBGL_ALWAYS_SOFTWARE=1 | -eLIBGL_ALWAYS_SOFTWARE=1)
+					auto_gpu=0
+					;;
+				LIBGL_ALWAYS_SOFTWARE | --env=LIBGL_ALWAYS_SOFTWARE | -eLIBGL_ALWAYS_SOFTWARE)
+					[[ ${LIBGL_ALWAYS_SOFTWARE:-0} != 1 ]] || auto_gpu=0
+					;;
+				esac
+			done
+			# Docker's template variables must remain literal.
+			# shellcheck disable=SC2016
+			if [[ $auto_gpu == 1 ]] && test -d /sys/module/nvidia &&
+				gpu_runtime=$("$runtime" info --format '{{range $name, $_ := .Runtimes}}{{if eq $name "nvidia"}}nvidia{{end}}{{end}}' 2>/dev/null) &&
+				[[ $gpu_runtime == nvidia ]]; then
+				args+=(--gpus all)
+			fi
+		fi
 	fi
 	if [[ ( $host_backend != wayland || ${CLIPBOARD_SYNC:-1} == 1 ) && -d /tmp/.X11-unix ]]; then
 		args+=(--mount 'type=bind,source=/tmp/.X11-unix,target=/run/host/X11,readonly')
