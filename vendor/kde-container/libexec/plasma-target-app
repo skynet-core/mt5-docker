@@ -99,7 +99,10 @@ def main():
         check=True,
         env=application_environment(),
     )
-    if os.environ["DISPLAY_MODE"] in ("vnc", "web"):
+    if (
+        os.environ["DISPLAY_MODE"] in ("vnc", "web")
+        or os.environ.get("PLASMA_SOFTWARE_NESTED") == "1"
+    ):
         # Wait for the exported monitor before placing the fullscreen window.
         deadline = time.monotonic() + 75
         while subprocess.run(

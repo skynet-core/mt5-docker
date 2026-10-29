@@ -376,27 +376,106 @@ class TargetApplicationTests(unittest.TestCase):
                 )
 
     def test_remote_output_timeout_never_starts_application(self):
-        with (
-            patch.dict(
-                os.environ,
-                {"TARGET_APP": sys.executable, "DISPLAY_MODE": "vnc"},
-                clear=True,
-            ),
-            patch.object(sys, "argv", ["app"]),
-            patch.object(
-                APP.subprocess,
-                "run",
-                side_effect=[
-                    SimpleNamespace(returncode=0),
-                    SimpleNamespace(returncode=1),
-                ],
-            ),
-            patch.object(APP.subprocess, "Popen") as spawn,
-            patch.object(APP.time, "monotonic", side_effect=[0, 76]),
-            self.assertRaisesRegex(RuntimeError, "Kiosk output did not become ready"),
+        for mode, software in (("vnc", "0"), ("nested", "1")):
+            with (
+                self.subTest(mode=mode, software=software),
+                patch.dict(
+                    os.environ,
+                    {
+                        "TARGET_APP": sys.executable,
+                        "DISPLAY_MODE": mode,
+                        "PLASMA_SOFTWARE_NESTED": software,
+                    },
+                    clear=True,
+                ),
+                patch.object(sys, "argv", ["app"]),
+                patch.object(
+                    APP.subprocess,
+                    "run",
+                    side_effect=[
+                        SimpleNamespace(returncode=0),
+                        SimpleNamespace(returncode=1),
+                    ],
+                ),
+                patch.object(APP.subprocess, "Popen") as spawn,
+                patch.object(APP.time, "monotonic", side_effect=[0, 76]),
+                self.assertRaisesRegex(
+                    RuntimeError, "Kiosk output did not become ready"
+                ),
+            ):
+                APP.main()
+            spawn.assert_not_called()
+
+    def test_nested_software_waits_for_exported_monitor_before_launching(self):
+        for mode, software in (
+            ("nested", "1"),
+            ("nested", "0"),
+            ("nested", None),
+            ("headless", None),
         ):
-            APP.main()
-        spawn.assert_not_called()
+            with (
+                self.subTest(mode=mode, software=software),
+                tempfile.TemporaryDirectory() as directory,
+            ):
+                environment = {"TARGET_APP": sys.executable, "DISPLAY_MODE": mode}
+                if software is not None:
+                    environment["PLASMA_SOFTWARE_NESTED"] = software
+                checks = [1, 0] if software == "1" else []
+                events, handlers = [], {}
+                child = Mock(pid=456, returncode=0)
+                child.poll.return_value = None
+
+                def prerequisite(arguments, *, events=events, checks=checks, **options):
+                    if arguments == ["/usr/local/libexec/plasma-wait", "compositor"]:
+                        self.assertTrue(options["check"])
+                        events.append("compositor")
+                        return SimpleNamespace(returncode=0)
+                    self.assertEqual(
+                        arguments,
+                        ["/usr/local/libexec/plasma-remote-output", "--check"],
+                    )
+                    self.assertFalse(options["check"])
+                    status = checks.pop(0)
+                    events.append(f"output:{status}")
+                    return SimpleNamespace(returncode=status)
+
+                def launch(
+                    *_arguments, checks=checks, events=events, child=child, **options
+                ):
+                    self.assertFalse(
+                        checks, "application started before monitor readiness"
+                    )
+                    self.assertTrue(options["start_new_session"])
+                    events.append("child")
+                    return child
+
+                def sleep(_seconds, handlers=handlers):
+                    if signal.SIGTERM in handlers:
+                        handlers[signal.SIGTERM](None, None)
+
+                with (
+                    patch.dict(os.environ, environment, clear=True),
+                    patch.object(sys, "argv", ["app"]),
+                    patch.object(APP, "STATE", Path(directory) / "state.json"),
+                    patch.object(APP, "start_time", return_value="identity"),
+                    patch.object(APP.subprocess, "run", side_effect=prerequisite),
+                    patch.object(APP.subprocess, "Popen", side_effect=launch),
+                    patch.object(
+                        APP.signal,
+                        "signal",
+                        side_effect=lambda sig, handler, handlers=handlers: (
+                            handlers.__setitem__(sig, handler)
+                        ),
+                    ),
+                    patch.object(APP.time, "sleep", side_effect=sleep),
+                    patch.object(APP.os, "killpg"),
+                    contextlib.redirect_stdout(io.StringIO()),
+                ):
+                    self.assertEqual(APP.main(), 0)
+                expected = ["compositor"]
+                if software == "1":
+                    expected += ["output:1", "output:0"]
+                self.assertEqual(events, [*expected, "child"])
 
     def test_cli_rejects_invalid_target_with_a_clear_error(self):
         source = ROOT / "vendor/kde-container/libexec/plasma-target-app"
