@@ -7,6 +7,9 @@ compatibility sources. Existing source copyright and license notices are retaine
 The test-only RFB client in ../../tests/rfb.py is copied from the same source commit.
 
 Local changes:
+- Clipboard relay filters X11 selection negotiation targets (TARGETS, MULTIPLE,
+  TIMESTAMP and SAVE_TARGETS) before reading or forwarding data. Their atoms and
+  timestamps belong to one X server and are not transferable MIME content.
 - X11 kiosk sessions require kwin_x11, without requiring startplasma-x11.
 - Kiosk Qt clients use the generic theme, avoiding Qt 6.11's built-in KDE theme
   startup crash when the optional Plasma integration package is absent.

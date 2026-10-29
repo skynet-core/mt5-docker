@@ -1,6 +1,8 @@
 """The clipboard validator must stay on the supplied private parent display."""
 
+import base64
 import importlib.util
+import queue
 import tempfile
 import unittest
 from pathlib import Path
@@ -14,6 +16,31 @@ SPEC.loader.exec_module(CLIPBOARD)
 
 
 class ClipboardIsolationTests(unittest.TestCase):
+    def reader(self, payload):
+        probe = object.__new__(CLIPBOARD.Probe)
+        probe.messages = queue.Queue()
+        probe.messages.put(
+            {
+                "mode": 0,
+                "data": {
+                    name: base64.b64encode(value).decode()
+                    for name, value in payload.items()
+                },
+            }
+        )
+        return probe
+
+    def test_reader_rejects_x11_transport_metadata(self):
+        for target in ("TARGETS", "MULTIPLE", "TIMESTAMP", "SAVE_TARGETS"):
+            with self.subTest(target=target):
+                probe = self.reader({"text/plain": b"test", target: b"\0\1\2\3"})
+                with self.assertRaisesRegex(RuntimeError, "X11 transport targets"):
+                    probe.wait({"text/plain": b"test"})
+
+    def test_reader_keeps_arbitrary_mime_content(self):
+        payload = {"text/plain": b"test", "application/x-test-binary": b"\0\1\2\3"}
+        self.assertEqual(self.reader(payload).wait({"text/plain": b"test"}), payload)
+
     def test_transfers_use_fresh_readers_and_distinct_payloads(self):
         probes = []
         testcase = self

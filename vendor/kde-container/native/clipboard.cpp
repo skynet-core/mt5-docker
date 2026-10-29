@@ -45,7 +45,10 @@ using Data = std::map<QString, QByteArray>;
 constexpr qsizetype maxBytes = 64LL * 1024 * 1024;
 constexpr qsizetype maxWireBytes = maxBytes * 2;
 bool sessionLocal(const QString &type) {
-  return type == "application/vnd.portal.filetransfer" ||
+  // X11 negotiation targets contain server-local atoms/timestamps, not content.
+  return type == "TARGETS" || type == "MULTIPLE" || type == "TIMESTAMP" ||
+         type == "SAVE_TARGETS" ||
+         type == "application/vnd.portal.filetransfer" ||
          type == "application/x-kde-source-id" ||
          type == "application/x-kde-onlyReplaceEmpty" ||
          // Old clipboard history may retain the bridge's former UUID marker.
@@ -116,7 +119,7 @@ bool transfer(int fd, QByteArray &bytes, bool writing) {
 }
 
 void normalize(Data &data) {
-  // Portal transfer keys belong to the source session bus, not the destination.
+  // Selection and session metadata belongs to the source connection.
   for (auto it = data.begin(); it != data.end();) {
     if (sessionLocal(it->first))
       it = data.erase(it);

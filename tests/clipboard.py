@@ -118,6 +118,17 @@ class Probe:
             if message["mode"] == 0 and all(
                 actual.get(key) == value for key, value in expected.items()
             ):
+                metadata = {
+                    "TARGETS",
+                    "MULTIPLE",
+                    "TIMESTAMP",
+                    "SAVE_TARGETS",
+                } & actual.keys()
+                if metadata:
+                    raise RuntimeError(
+                        "Clipboard includes X11 transport targets: "
+                        + ", ".join(sorted(metadata))
+                    )
                 return actual
         raise RuntimeError(
             f"Clipboard did not receive {list(expected)} within 20 seconds"
