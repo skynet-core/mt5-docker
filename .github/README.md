@@ -1,7 +1,7 @@
 # GitHub Actions
 
 [`build-and-publish.yml`](workflows/build-and-publish.yml) uses standard free
-`ubuntu-24.04` runners. Each distribution gets its own runner and build cache.
+`ubuntu-latest` runners. Each distribution gets its own runner and build cache.
 New runs cancel superseded runs for the same branch or tag, freeing hosted
 runners for the current commit.
 
@@ -22,6 +22,21 @@ then builds the production image and runs:
    verify the saved file. Nested cases also exchange text and PNG clipboard data.
    Tests reproduce delayed capture startup where PipeWire is used; X11 capture
    records that phase as inapplicable and still verifies authenticated frames.
+3. Real MT5 mouse and keyboard checks in eight GUI profiles per image. Mixed-case
+   text and Ctrl+A replacement must match read-only Win32 edit-control readback;
+   mouse clicks must close Cancel and open File, and Escape must close the menu.
+   Web cases use an actual Chromium/noVNC session. Private displays, internal
+   networks, empty credentials and fresh Wine volumes isolate every case.
+
+Before image jobs, the source job requires at least **94% executable-line coverage
+for every maintained Python, Bash and C++ source**, including tests and maintained
+vendored code. Python/C++ branch reports are separate. Bash traces contain only
+paths and line numbers, never command text or credentials. A dedicated Fedora
+test image builds and runs native coverage without adding test dependencies to
+published images. The compiler-audited declaration-only header is shown as N/A
+and pinned by source hash; other missing or empty measurements fail. The combined
+per-file table and raw/JSON/XML/HTML profiles are uploaded as `source-coverage`,
+including after a failed check. Source hashes prevent merging stale profiles.
 
 Run the same source linters locally with:
 
@@ -52,11 +67,11 @@ needs no desktop session or GPU.
 
 The workflow reclaims unused Android/.NET/GHC SDK space and requires 25 GiB free
 after cleanup for the Wine image, native builders and test volumes. BuildKit runs
-at most two build vertices concurrently. Debian and Ubuntu use
-`--build-arg KWIN_VARIANT=distro`, which completely skips the private Qt/KF/KWin
-source stages. Published hosted-CI images therefore contain their distribution
-KWin versions. The default local build still compiles KWin 6.8.2; see
-[`build/KWIN.md`](../build/KWIN.md). Arch still builds its required separate X11
+at most two build vertices concurrently. `KWIN_VARIANT` in the workflow selects
+the Debian/Ubuntu stack; the current value `source` builds KWin 6.8.2. Set it to
+`distro` to skip the private Qt/KF/KWin stages when the runner budget requires it.
+The published image label records the selected variant; see
+[`build/KWIN.md`](../build/KWIN.md). Arch builds its required separate X11
 compositor against packaged Qt/KF.
 
 Software rendering requires the host `udmabuf` kernel module; CI loads it before
@@ -110,6 +125,12 @@ only chart PNGs, tester statistics and diagnostic phase/error-type records;
 raw account responses, terminal logs and
 application screenshots stay out of uploads. NVIDIA hardware tests remain a
 separate local check because standard runners provide no NVIDIA GPU.
+
+Account-free MT5 input evidence is under
+`artifacts/mt5-input/<distribution>/<backend>/<mode>/`, with nested host transport
+subfolders. It includes screenshots, expected/read-back text, GUI observation,
+phase diagnostics and browser traces. Private parent sockets and Xauthority
+files are excluded from uploads.
 
 Display failures print their case paths and causes in the job log, plus the
 last 80 lines of the runner log on startup or runtime failure. A failed distro

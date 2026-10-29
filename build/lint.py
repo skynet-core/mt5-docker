@@ -53,6 +53,7 @@ def main():
             "--error-exitcode=1",
             "--library=qt",
             "--std=c++17",
+            "--language=c++",
         ],
     }
     failed = False

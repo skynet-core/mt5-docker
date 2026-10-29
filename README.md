@@ -234,7 +234,7 @@ The launcher discovers the host Wayland/X11 socket and Xauthority cookie. `HOST_
 
 VNC passwords are limited to eight printable ASCII characters by the protocol. `VNC_PASSWORD_FILE` mounts a private password file. `VNC_PORT`, `WEB_PORT`, and `BIND_ADDRESS` control the host binding; the default address is `127.0.0.1`.
 
-The startup GPU probe tests EGL/GBM rendering on available devices; KWin selects its rendering GPU separately. `bin/mt5-run -e LIBGL_ALWAYS_SOFTWARE=1` forces software rendering.
+The startup GPU probe tests EGL/GBM rendering on available devices; KWin selects its rendering GPU separately. `bin/mt5-run -e LIBGL_ALWAYS_SOFTWARE=1` requests Mesa software rendering. CPU regression tests also hide physical DRI devices before init: KWin/Wine can enumerate those devices even with this variable set.
 
 Docker native Wayland nesting automatically adds `--gpus all` when the host NVIDIA driver and NVIDIA Container Toolkit runtime are available. This supplies the driver libraries needed to exchange frames with an NVIDIA host compositor; access to an AMD GPU alone can otherwise leave the nested window black. Explicit GPU, runtime, CDI and software-rendering arguments take precedence. For other modes on an NVIDIA host configured with NVIDIA Container Toolkit, pass `--gpus all` to `bin/mt5-run`.
 
@@ -349,11 +349,54 @@ This covers **40 cases**: four images × two compositors × headless/VNC/web plu
 
 Each run contains an `INDEX.md` and `index.json`, followed by `<distribution>/<backend>/<mode>/`; nested cases add `on-wayland/` or `on-x11/`. Each case retains its screenshot, result metadata, startup/container/service logs and GUI input files. Headless captures use the compositor screenshot API or X11 root pixels, with VNC/web services disabled. The index fails if any expected profile, screenshot, input proof or required log is missing. This display suite uses a test GUI; the separate MT5 suite above verifies actual account login, MT5 charts and expert backtests.
 
+The additional MT5 input suite drives the **real terminal** in eight GUI profiles per image: Wayland/X11 × VNC, web, nested on Wayland and nested on X11. It clicks the company-search edit, types mixed-case text, replaces the nonempty value with Ctrl+A, checks the exact text through read-only Win32 APIs, clicks Cancel, opens File with the mouse and closes it with Escape. Web input travels through Chromium and noVNC. Each case uses an internal network, a fresh Wine volume, empty account credentials and a private parent display.
+
+```sh
+uv run --locked playwright install --with-deps --only-shell chromium
+for distro in fedora-44 debian-13 ubuntu-26.04 archlinux; do
+  uv run --locked python tests/mt5_input.py \
+    --image "ghcr.io/skynet-core/mt5-docker:$distro" --case "$distro"
+done
+```
+
+Evidence is under `artifacts/mt5-input/<distribution>/<backend>/<mode>/`, with `on-wayland/` or `on-x11/` below nested cases. It includes startup, keyboard, menu and final screenshots, expected/observed text, read-only GUI state, the last input phase and service/compositor logs. Web cases also retain a browser trace. `results.json` fails when any expected case or input assertion fails. Add `--gpu` for a separate NVIDIA hardware run; Wayland uses NVIDIA while the X11/Xvfb profiles use llvmpipe. Standard CI hides physical DRI devices inside the test namespace to exercise software rendering. Both tiers hide host audio, input and USB devices before init.
+
 On hosts without a GPU, older KWin versions use QPainter, which cannot provide the ScreenShot2 API. Wayland headless sessions then render through a private Xvfb display; the screenshot captures that actual KWin output, with VNC and web services still disabled. Capture metadata records this backing display, and validation checks its private session configuration. Failed runs print the affected profiles and errors in the CI log while retaining the complete evidence; successful cases keep their individual pass results.
 
 KWin 6.8 requires DRI3 for direct nesting on X11. In software mode, its Wayland session instead renders through a private, authenticated RFB connection to an X11 viewer. KWin still runs the kiosk application; the viewer displays its output and forwards input, while the existing clipboard relay handles text and images. The RFB listener binds only to container loopback. Builds retain only the viewer executable and missing shared libraries, leaving the VNC server packages in the builder.
 
 `--gpu` requires NVIDIA Container Toolkit and records both the EGL probe and KWin's actual renderer. Overlay cases also record the compositor's loaded Qt libraries and reject mixed distro/overlay Qt paths. KWin 6.8's software Wayland backend needs the host's `/dev/udmabuf` device; load the host module with `sudo modprobe udmabuf` if necessary. The privileged launcher exposes that device to the container.
+
+## Per-file source coverage
+
+CI requires **at least 94% executable-line coverage for each maintained Python, C++ and Bash source file**, including test code, helpers, extensionless scripts and maintained code under `vendor/kde-container`. An uncovered file fails even if the repository average is high. Python and C++ branch coverage is reported separately. Fetched dependencies and generated compiler output are outside the maintained-source inventory.
+
+Python uses `coverage.py`, native tests compile the actual C++ with GCC coverage, and Bash uses `shfmt` command locations plus a metadata-only DEBUG trace. The shell trace records source paths and line numbers; it does not record commands, environment values or credentials. Source hashes reject coverage from changed revisions. The declaration-only `tests/native/fake-wayland.h` is listed as N/A with its compiler audit and an exact source hash; edits require re-audit and cannot silently inherit that classification.
+
+```sh
+go install mvdan.cc/sh/v3/cmd/shfmt@v3.14.1
+export PATH="$(go env GOPATH)/bin:$PATH"
+mkdir -p artifacts/coverage/python artifacts/coverage/shell
+export COVERAGE_FILE="$PWD/artifacts/coverage/python/.coverage"
+export MT5_SHELL_COVERAGE_DIR="$PWD/artifacts/coverage/shell"
+export MT5_SHELL_COVERAGE_MAP="$MT5_SHELL_COVERAGE_DIR/maps.jsonl"
+uv run --locked python build/coverage_report.py --record-sources artifacts/coverage/sources.json
+BASH_ENV="$PWD/tests/shell_trace.sh" uv run --locked coverage run --parallel-mode -m unittest discover -s tests -v
+uv run --locked coverage combine --keep
+```
+
+Build and run the separate [native coverage image](tests/native/README.md), then enforce the combined gate:
+
+```sh
+uv run --locked python build/coverage_report.py \
+  --source-manifest artifacts/coverage/sources.json \
+  --python-data "$COVERAGE_FILE" \
+  --shell-traces "$MT5_SHELL_COVERAGE_DIR" --shell-map "$MT5_SHELL_COVERAGE_MAP" \
+  --native-report artifacts/coverage/native/native.json \
+  --output artifacts/coverage/report
+```
+
+The per-file table is `artifacts/coverage/report/INDEX.md`; raw profiles, JSON, XML and HTML reports are retained by CI. Native fault tests use controlled dependency boundaries; the production-image MT5 input and broker suites provide the compositor, browser, login and backtest checks.
 
 ## Recorded acceptance
 

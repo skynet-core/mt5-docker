@@ -1,0 +1,27 @@
+[run]
+branch = True
+parallel = True
+patch = subprocess, execv, _exit
+sigterm = True
+relative_files = True
+data_file = artifacts/coverage/python/.coverage
+include =
+    bin/*
+    build/*
+    init.d/*
+    libexec/*
+    tests/*
+    vendor/kde-container/*
+
+[report]
+show_missing = True
+exclude_lines =
+
+[html]
+directory = artifacts/coverage/python/html
+
+[xml]
+output = artifacts/coverage/python/coverage.xml
+
+[json]
+output = artifacts/coverage/python/coverage.json

@@ -317,6 +317,8 @@ def start(
     sleep=False,
     gpu=False,
     fixture=None,
+    application=None,
+    dimensions=(800, 600),
 ):
     arguments = [
         runtime,
@@ -325,6 +327,9 @@ def start(
         "--name",
         name,
         "--no-healthcheck",
+        "--entrypoint=/usr/local/bin/mt5-test-init",
+        "--mount",
+        f"type=bind,source={Path(__file__).with_name('isolated-entrypoint.sh').resolve()},target=/usr/local/bin/mt5-test-init,readonly",
         # systemctl mask cannot replace this custom unit's existing /etc file.
         "--mount",
         "type=bind,source=/dev/null,target=/etc/systemd/system/mt5-mcp.service,readonly",
@@ -343,11 +348,13 @@ def start(
         "-e",
         f"DISPLAY_MODE={mode}",
         "-e",
-        "DISPLAY_WIDTH=800",
+        f"DISPLAY_WIDTH={dimensions[0]}",
         "-e",
-        "DISPLAY_HEIGHT=600",
+        f"DISPLAY_HEIGHT={dimensions[1]}",
         "-e",
         f"LIBGL_ALWAYS_SOFTWARE={0 if gpu else 1}",
+        "-e",
+        f"MT5_TEST_GPU={int(gpu)}",
         "-e",
         f"PLASMA_UID={os.getuid() or 1000}",
         "-e",
@@ -357,9 +364,13 @@ def start(
         "-e",
         "VNC_PASSWORD=testpass",
         "-e",
-        "TARGET_APP=/usr/bin/sleep infinity"
-        if sleep
-        else "TARGET_APP=/usr/local/bin/plasma-ui-fixture /tmp/typed.txt",
+        f"TARGET_APP={application}"
+        if application is not None
+        else (
+            "TARGET_APP=/usr/bin/sleep infinity"
+            if sleep
+            else "TARGET_APP=/usr/local/bin/plasma-ui-fixture /tmp/typed.txt"
+        ),
     ]
     if gpu:
         arguments.extend(

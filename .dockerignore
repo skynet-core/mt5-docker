@@ -4,8 +4,10 @@
 .codex
 .venv
 .env
-**/__pycache__
 artifacts
-tests
+tests/*
+!tests/native/
+!tests/native/**
+**/__pycache__
 expert
 .ruff_cache/

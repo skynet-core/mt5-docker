@@ -2,6 +2,7 @@
 
 import json
 import os
+import shlex
 import socket
 import subprocess
 import sys
@@ -39,9 +40,10 @@ class HostGpuTests(unittest.TestCase):
             commands = temporary / "commands.jsonl"
             mock = temporary / "host.sh"
             mock.write_text(
+                f"source {shlex.quote(str(ROOT / 'tests/shell_trace.sh'))}\n"
                 "test() {\n"
                 "  if [[ ${1:-} == -d && ${2:-} == /sys/module/nvidia ]]; then\n"
-                '    [[ $FAKE_NVIDIA_LOADED == 1 ]]\n'
+                "    [[ $FAKE_NVIDIA_LOADED == 1 ]]\n"
                 "  else\n"
                 '    builtin test "$@"\n'
                 "  fi\n"
@@ -88,6 +90,9 @@ class HostGpuTests(unittest.TestCase):
                 for key, value in os.environ.items()
                 if not key.startswith(("MT5_", "PLASMA_")) and key not in cleared
             }
+            for key in ("MT5_SHELL_COVERAGE_DIR", "MT5_SHELL_COVERAGE_MAP"):
+                if key in os.environ:
+                    settings[key] = os.environ[key]
             settings.update(
                 {
                     "PATH": str(temporary) + os.pathsep + settings["PATH"],
@@ -165,8 +170,14 @@ class HostGpuTests(unittest.TestCase):
                 arguments, queries = self.launch(*selected)
                 self.assertEqual(arguments[-len(selected) - 1 :], [*selected, IMAGE])
                 self.assertEqual(
-                    sum(value == "--gpus" or value.startswith("--gpus=") for value in arguments),
-                    sum(value == "--gpus" or value.startswith("--gpus=") for value in selected),
+                    sum(
+                        value == "--gpus" or value.startswith("--gpus=")
+                        for value in arguments
+                    ),
+                    sum(
+                        value == "--gpus" or value.startswith("--gpus=")
+                        for value in selected
+                    ),
                 )
                 self.assertFalse(queries)
 

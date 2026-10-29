@@ -10,15 +10,15 @@ from PIL import Image
 
 
 class RFBClient:
-    def __init__(self, port, password="testpass", web=False):
+    def __init__(self, port, password="testpass", web=False, host="127.0.0.1"):
         if web:
             self.connection = websocket.create_connection(
-                f"ws://127.0.0.1:{port}/websockify", timeout=20, subprotocols=["binary"]
+                f"ws://{host}:{port}/websockify", timeout=20, subprotocols=["binary"]
             )
             self.send = self.connection.send_binary
             self.receive = self.connection.recv
         else:
-            self.connection = socket.create_connection(("127.0.0.1", port), timeout=20)
+            self.connection = socket.create_connection((host, port), timeout=20)
             self.send = self.connection.sendall
             self.receive = lambda: self.connection.recv(1024 * 1024)
         self.pending = bytearray()
@@ -85,6 +85,8 @@ class RFBClient:
 
     def click(self, x, y):
         self.pointer(x, y)
+        # Allow remote pointer focus to settle before pressing the button.
+        time.sleep(0.1)
         self.pointer(x, y, 1)
         time.sleep(0.08)
         self.pointer(x, y)
@@ -105,6 +107,8 @@ class RFBClient:
             self.held_keys.add(keysym)
         else:
             self.held_keys.discard(keysym)
+        # Wine reads modifier state asynchronously after the remote key event.
+        time.sleep(0.01)
 
     def text(self, value):
         for character in value:

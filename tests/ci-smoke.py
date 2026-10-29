@@ -212,10 +212,13 @@ def main(args):
             with contextlib.suppress(subprocess.TimeoutExpired):
                 result = docker(*arguments, check=False)
                 (output / name).write_bytes(result.stdout + result.stderr)
-        with contextlib.suppress(subprocess.TimeoutExpired):
-            docker("stop", "--timeout", "10", container, check=False)
-            docker("rm", "-f", container, check=False)
-            docker("volume", "rm", volume, check=False)
+        for arguments in (
+            ("stop", "--timeout", "10", container),
+            ("rm", "-f", container),
+            ("volume", "rm", volume),
+        ):
+            with contextlib.suppress(subprocess.TimeoutExpired):
+                docker(*arguments, check=False)
         (output / "results.json").write_text(json.dumps(evidence, indent=2) + "\n")
         print(f"MT5 component smoke evidence: {output}", flush=True)
 

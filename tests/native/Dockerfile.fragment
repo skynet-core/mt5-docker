@@ -1,0 +1,14 @@
+# Append to a generated Dockerfile, whose input-source and uv stages are reused.
+FROM input-source AS native-coverage
+SHELL ["/bin/bash", "-e", "-u", "-o", "pipefail", "-c"]
+WORKDIR /source
+COPY vendor/kde-container/ /source/vendor/kde-container/
+COPY tests/native/ /source/tests/native/
+COPY pyproject.toml uv.lock /source/
+RUN --mount=type=bind,from=uv,source=/uv,target=/usr/local/bin/uv \
+    uv sync --locked --only-group native --python 3.12 \
+    && cmake -S tests/native -B /native-build -G Ninja \
+        -DCMAKE_BUILD_TYPE=Debug -DKRFB_SOURCE_DIR=/krfb-source \
+    && cmake --build /native-build --parallel 2
+ENTRYPOINT ["/source/.venv/bin/python", "/source/tests/native/run_coverage.py"]
+CMD []

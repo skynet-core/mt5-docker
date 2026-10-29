@@ -27,7 +27,9 @@ jobs:
   checks:
     name: Source checks
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 45
+    env:
+      COVERAGE_FILE: ${{ github.workspace }}/artifacts/coverage/python/.coverage
     steps:
       - uses: actions/checkout@v7 # v7
         with:
@@ -38,12 +40,75 @@ jobs:
           version: '0.13.6'
           python-version: '3.12'
 
-      - name: Locked dependencies, unit tests and lint
+      - name: Install locked dependencies and shell coverage parser
         run: |
           uv sync --locked
-          uv run --locked python -m unittest discover -s tests -v
+          mkdir -p artifacts/coverage/python artifacts/coverage/shell artifacts/coverage/native
+          GOBIN="$RUNNER_TEMP/mt5-tools" go install mvdan.cc/sh/v3/cmd/shfmt@v3.14.1
+          echo "$RUNNER_TEMP/mt5-tools" >> "$GITHUB_PATH"
+
+      - name: Lint every maintained source file
+        run: |
           uv run --locked python build/lint.py
           python3 build/render-dockerfiles.py --check
+
+      - name: Record source hashes before collecting coverage
+        run: uv run --locked python build/coverage_report.py --record-sources artifacts/coverage/sources.json
+
+      - name: Test Python and Bash with per-file coverage
+        env:
+          BASH_ENV: ${{ github.workspace }}/tests/shell_trace.sh
+          MT5_SHELL_COVERAGE_DIR: ${{ github.workspace }}/artifacts/coverage/shell
+          MT5_SHELL_COVERAGE_MAP: ${{ github.workspace }}/artifacts/coverage/shell/maps.jsonl
+        run: |
+          uv run --locked coverage run --parallel-mode -m unittest discover -s tests -v \
+            2>&1 | tee artifacts/coverage/python/unittest.log
+
+      - name: Preserve Python coverage reports
+        if: always()
+        run: |
+          uv run --locked coverage combine --keep
+          cp "$COVERAGE_FILE" artifacts/coverage/python/combined.coverage
+          uv run --locked coverage json
+          uv run --locked coverage xml
+          uv run --locked coverage html
+
+      - uses: docker/setup-buildx-action@v4 # v4
+        with:
+          buildkitd-config-inline: |
+            [worker.oci]
+              max-parallelism = 2
+
+      - name: Prepare native coverage build
+        run: cat Dockerfile.fedora-44 tests/native/Dockerfile.fragment > "$RUNNER_TEMP/Dockerfile.native-coverage"
+
+      - name: Build native tests with coverage
+        uses: docker/build-push-action@v7 # v7
+        with:
+          context: .
+          file: ${{ runner.temp }}/Dockerfile.native-coverage
+          target: native-coverage
+          platforms: linux/amd64
+          load: true
+          tags: mt5:native-coverage
+          cache-from: type=gha,scope=mt5-native-coverage-fedora-44
+          cache-to: type=gha,scope=mt5-native-coverage-fedora-44,mode=max,ignore-error=true
+
+      - name: Run isolated native tests and collect reports
+        run: |
+          docker run --rm --network none \
+            --volume "$GITHUB_WORKSPACE/artifacts/coverage/native:/coverage" mt5:native-coverage
+
+      - name: Require at least 94 percent coverage for every source file
+        if: always()
+        run: |
+          uv run --locked python build/coverage_report.py \
+            --source-manifest artifacts/coverage/sources.json \
+            --python-data artifacts/coverage/python/combined.coverage \
+            --shell-traces artifacts/coverage/shell \
+            --shell-map artifacts/coverage/shell/maps.jsonl \
+            --native-report artifacts/coverage/native/native.json \
+            --output artifacts/coverage/report
 
       - name: Check Dependabot and Windows dependency resolution
         run: |
@@ -57,6 +122,16 @@ jobs:
 
       - name: Validate workflow syntax
         run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 .github/workflows/build-and-publish.yml
+
+      - name: Retain source coverage evidence
+        if: always()
+        uses: actions/upload-artifact@v7 # v7
+        with:
+          name: source-coverage
+          path: artifacts/coverage/
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 14
 
   images:
     name: ${{ matrix.distro }}
@@ -149,8 +224,8 @@ jobs:
           context: .
           file: Dockerfile.${{ matrix.distro }}
           target: mt5
-          # The private Qt/KF/KWin source stack exceeds a standard runner's budget.
-          # Fedora/Arch ignore this apt-only argument.
+          # Switch to distro to skip private apt builds when runner space is limited.
+          # Fedora/Arch ignore this argument.
           build-args: KWIN_VARIANT=${{ env.KWIN_VARIANT }}
           platforms: linux/amd64
           pull: true
@@ -182,6 +257,19 @@ jobs:
           OUTPUT_DIR: ${{ github.workspace }}/artifacts/display-matrix
         run: |
           tests/display-matrix.sh "$DISTRO"
+
+      - name: Install headless Chromium for MT5 browser input tests
+        env:
+          PLAYWRIGHT_BROWSERS_PATH: ${{ runner.temp }}/mt5-playwright
+        run: uv run --locked playwright install --with-deps --only-shell chromium
+
+      - name: Verify real MT5 mouse and keyboard input in all eight GUI profiles
+        env:
+          PLAYWRIGHT_BROWSERS_PATH: ${{ runner.temp }}/mt5-playwright
+        run: |
+          uv run --locked python tests/mt5_input.py \
+            --image "$IMAGE" --parent-image "$FIXTURE_IMAGE" \
+            --case "$DISTRO" --output artifacts/mt5-input
 
       - name: Verify broker login, MCP and expert backtests in all eight modes
         if: steps.policy.outputs.publish == 'true'
@@ -228,6 +316,7 @@ jobs:
           path: |
             artifacts/smoke/
             artifacts/display-matrix/
+            artifacts/mt5-input/
             artifacts/tested-image-id.txt
             artifacts/broker/*/chart.png
             artifacts/broker/*/summary.json
@@ -235,5 +324,8 @@ jobs:
             !artifacts/display-matrix/**/parent/runtime/**
             !artifacts/display-matrix/**/parent/x11/**
             !artifacts/display-matrix/**/parent/Xauthority
+            !artifacts/mt5-input/**/parent/runtime/**
+            !artifacts/mt5-input/**/parent/x11/**
+            !artifacts/mt5-input/**/parent/Xauthority
           if-no-files-found: warn
           retention-days: 14

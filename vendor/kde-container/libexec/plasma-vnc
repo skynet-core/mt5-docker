@@ -4,9 +4,10 @@ extra=()
 if [[ $DISPLAY_BACKEND == wayland && ${PLASMA_SOFTWARE_CAPTURE:-0} != 1 ]]; then
 	export PLASMA_KWIN_INPUT=1
 	# Virtualmonitor requires no interactive portal approval.
+	password=$(cat /etc/plasma/vnc-password)
 	exec /usr/bin/krfb-virtualmonitor --name Plasma \
 		--resolution "${DISPLAY_WIDTH}x${DISPLAY_HEIGHT}" --port 5900 \
-		--password "$(cat /etc/plasma/vnc-password)"
+		--password "$password"
 fi
 if [[ ${PLASMA_SOFTWARE_CAPTURE:-0} == 1 ]]; then
 	export DISPLAY=$PLASMA_SOFTWARE_DISPLAY XAUTHORITY=/etc/plasma/Xauthority

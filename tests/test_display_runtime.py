@@ -3,6 +3,7 @@
 import importlib.machinery
 import importlib.util
 import os
+import shlex
 import subprocess
 import tempfile
 import unittest
@@ -267,7 +268,10 @@ class RenderingPolicyTests(unittest.TestCase):
         adapter = SOURCE.parent / "plasma-backend/kwin_wayland"
         with tempfile.TemporaryDirectory() as directory:
             intercept = Path(directory) / "intercept-exec"
-            intercept.write_text('exec() { printf "%s\\n" "$@"; }\n')
+            intercept.write_text(
+                f"source {shlex.quote(str(SOURCE.parents[3] / 'tests/shell_trace.sh'))}\n"
+                'exec() { printf "%s\\n" "$@"; }\n'
+            )
             for overlay in (False, True):
                 environment = {
                     **os.environ,

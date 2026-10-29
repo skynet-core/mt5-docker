@@ -6,16 +6,20 @@ dependencies = []
 
 [dependency-groups]
 dev = [
+    {include-group = "native"},
+    "coverage>=7.10,<8",
     "cppcheck==1.5.3",
     "mcp>=1.26,<2",
     "mt5-mcp==0.6.3",
     "pillow>=13,<14",
+    "playwright>=1.55,<2",
     "pycryptodome>=3.20,<4",
     "python-dotenv==1.2.4",
     "ruff==0.17.3",
     "shellcheck-py==0.11.0.1",
     "websocket-client>=1.8,<2",
 ]
+native = ["gcovr>=8,<9"]
 
 [tool.uv]
 package = false

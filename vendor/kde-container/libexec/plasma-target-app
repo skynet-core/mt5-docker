@@ -73,7 +73,7 @@ def check():
     try:
         state = json.loads(STATE.read_text())
         return start_time(state["pid"]) == state["start_time"]
-    except (OSError, ValueError, KeyError, IndexError):
+    except (OSError, ValueError, KeyError, IndexError, TypeError):
         return False
 
 
