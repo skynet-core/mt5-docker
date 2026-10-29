@@ -74,7 +74,7 @@ jobs:
       DISTRO: ${{ matrix.distro }}
       IMAGE: mt5:${{ matrix.distro }}
       FIXTURE_IMAGE: mt5:ci-fixture-${{ matrix.distro }}
-      KWIN_VARIANT: distro
+      KWIN_VARIANT: source
 
     steps:
       - uses: actions/checkout@v7 # v7
