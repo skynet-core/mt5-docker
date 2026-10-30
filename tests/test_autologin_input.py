@@ -185,6 +185,10 @@ class ChartInputTests(unittest.TestCase):
             "not-ready",
             "malformed-event",
             "missing-target",
+            "tooltip",
+            "tooltip-and-dialog",
+            "disabled-tooltip",
+            "unknown-dialog",
         ):
             with (
                 self.subTest(failure=failure),
@@ -196,10 +200,23 @@ class ChartInputTests(unittest.TestCase):
                 if failure == "missing-target":
                     client.screenshot.return_value = Image.new("RGB", (800, 600))
                 probe = Mock()
+                tooltip = {
+                    "hwnd": 20,
+                    "class": "tooltips_class32",
+                    "rect": [1, 2, 30, 40],
+                }
+                dialog = {"hwnd": 21, "class": "#32770", "rect": [1, 2, 300, 400]}
+                unknown = {"hwnd": 22, "class": "OtherWindow", "rect": [1, 2, 300, 400]}
                 probe.state.return_value = {
                     "main": 10,
-                    "main_enabled": failure != "disabled",
-                    "dialogs": [20] if failure == "dialog" else [],
+                    "main_enabled": failure not in ("disabled", "disabled-tooltip"),
+                    "dialogs": {
+                        "dialog": [dialog],
+                        "tooltip": [tooltip],
+                        "tooltip-and-dialog": [tooltip, dialog],
+                        "disabled-tooltip": [tooltip],
+                        "unknown-dialog": [unknown],
+                    }.get(failure, []),
                 }
                 ready_calls = [0]
 
@@ -233,7 +250,7 @@ class ChartInputTests(unittest.TestCase):
                     ),
                     patch.object(mt5_input.time, "sleep"),
                 ):
-                    if failure:
+                    if failure not in (None, "tooltip"):
                         with self.assertRaises((RuntimeError, ValueError)):
                             mt5_input.autologin_input(
                                 "docker", "private", client, probe, output
@@ -256,7 +273,15 @@ class ChartInputTests(unittest.TestCase):
                 client.chord.assert_not_called()
                 client.key.assert_not_called()
                 client.text.assert_not_called()
-                if failure in ("dialog", "disabled", "not-ready", "missing-target"):
+                if failure in (
+                    "dialog",
+                    "disabled",
+                    "not-ready",
+                    "missing-target",
+                    "tooltip-and-dialog",
+                    "disabled-tooltip",
+                    "unknown-dialog",
+                ):
                     client.click.assert_not_called()
                 if failure in ("offset", "missing-event", "wrong-target"):
                     self.assertEqual(client.click.call_count, 1)

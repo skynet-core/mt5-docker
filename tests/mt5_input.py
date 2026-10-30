@@ -148,7 +148,9 @@ def chart_events(runtime, container, output):
 
 def autologin_input(runtime, container, client, probe, output, target_scale=1):
     state = wait_state(probe, lambda value: bool(value["main"]), timeout=120)
-    if not state["main_enabled"] or state["dialogs"]:
+    if not state["main_enabled"] or any(
+        dialog.get("class") != "tooltips_class32" for dialog in state["dialogs"]
+    ):
         raise RuntimeError("Autologin regression must start without a native dialog")
     deadline = time.monotonic() + 30
     attempts = []
