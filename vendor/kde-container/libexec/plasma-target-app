@@ -53,14 +53,20 @@ def command():
     return arguments
 
 
-def configure():
+def configure(executable):
     directory = Path(os.environ["XDG_CONFIG_HOME"])
     directory.mkdir(parents=True, exist_ok=True)
+    # Forced fullscreen leaves Wine's initial nonclient input geometry stale.
+    policy = (
+        "maximizehoriz=true\nmaximizehorizrule=2\n"
+        "maximizevert=true\nmaximizevertrule=2\n"
+        if Path(executable).name == "mt5-launch"
+        else "fullscreen=true\nfullscreenrule=2\n"
+    )
     # Apply only to normal application windows; leave dialogs usable.
     (directory / "kwinrulesrc").write_text(
         "[General]\ncount=1\nrules=1\n\n[1]\nDescription=Container kiosk\n"
-        "wmclassmatch=0\ntypes=1\nfullscreen=true\nfullscreenrule=2\n"
-        "noborder=true\nnoborderrule=2\n"
+        "wmclassmatch=0\ntypes=1\n" + policy + "noborder=true\nnoborderrule=2\n"
     )
 
 
@@ -91,7 +97,7 @@ def main():
     if "--validate" in sys.argv:
         return 0
     if "--configure" in sys.argv:
-        configure()
+        configure(arguments[0])
         return 0
 
     subprocess.run(

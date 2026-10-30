@@ -35,6 +35,14 @@ then builds the production image and runs:
    and stock KWin window decorations. Each distribution remains the tested MT5
    child; the existing eight-profile input suite still uses its matching parent.
    This test image adds no dependencies to published images and has no Wine stage.
+5. Both input suites repeat with `--startup autologin`: twenty additional profiles
+   per image use a dummy login on an internal network, without broker credentials.
+   No startup dialog or menu interaction may refresh Wine's window geometry before
+   the first chart click. Screenshot-located expert buttons must report their exact
+   chart-local click coordinates and object names through MT5's `OnChartEvent`.
+   The expert compiles once in a separate disposable, network-disabled container
+   before test sessions start. Production images contain no test expert or compiler
+   dependency. Publishing therefore requires 58 profiles per distribution.
 
 Before image jobs, the source job requires at least **94% executable-line coverage
 for every maintained Python, Bash and C++ source**, including tests and maintained
@@ -177,6 +185,11 @@ private parent sockets and Xauthority excluded. Every image job builds the
 decorated Arch parent as `mt5:ci-pointer-parent`, reusing the Arch production
 cache without adding another cache export. Image jobs allow up to 240 minutes
 for source builds and the complete acceptance suite.
+
+Startup-without-dialog evidence is retained under `artifacts/mt5-autologin-input/`
+and `artifacts/autologin-pointer-matrix/`. It includes expert source/binary hashes,
+zero-error compile logs, screenshot-discovered target bounds and raw chart events.
+Private display sockets and Xauthority files are excluded from uploads.
 
 Display failures print their case paths and causes in the job log, plus the
 last 80 lines of the runner log on startup or runtime failure. A failed distro

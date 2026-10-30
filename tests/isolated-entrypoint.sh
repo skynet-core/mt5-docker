@@ -16,6 +16,11 @@ for device in /dev/hidraw*; do
 	[[ -c $device ]] || continue
 	mount --bind /dev/null "$device"
 done
+if [[ -f /run/mt5-test/ChartInput.ex5 ]]; then
+	mql5=/home/plasma/.wine/drive_c/MT5/MQL5
+	install -d -o plasma -g plasma "$mql5" "$mql5/Experts" "$mql5/Files"
+	install -m 0644 -o plasma -g plasma /run/mt5-test/ChartInput.ex5 "$mql5/Experts/ChartInput.ex5"
+fi
 # Docker's --entrypoint clears CMD; preserve these images' normal init defaults.
 if (($# == 0)); then set -- /usr/sbin/init --system; fi
 exec /init.d/init.sh "$@"

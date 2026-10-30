@@ -14,10 +14,35 @@
 #include <wayland-client-protocol.h>
 #include <wayland-server-protocol.h>
 
+// The fixture implements only the protocol requests exercised on this socket.
+extern const wl_interface lockedInterface, relativeInterface;
+const wl_interface *lockTypes[] = {
+    &lockedInterface, &wl_surface_interface, &wl_pointer_interface,
+    &wl_region_interface, nullptr};
+const wl_message constraintRequests[] = {
+    {"destroy", "", nullptr}, {"lock_pointer", "noo?ou", lockTypes}};
+const wl_message destroyRequest[] = {{"destroy", "", nullptr}};
+const wl_message lockEvents[] = {
+    {"locked", "", nullptr}, {"unlocked", "", nullptr}};
+const wl_interface lockedInterface{
+    "zwp_locked_pointer_v1", 1, 1, destroyRequest, 2, lockEvents};
+const wl_interface constraintsInterface{
+    "zwp_pointer_constraints_v1", 1, 2, constraintRequests, 0, nullptr};
+const wl_interface *relativeTypes[] = {&relativeInterface, &wl_pointer_interface};
+const wl_message relativeRequests[] = {
+    {"destroy", "", nullptr}, {"get_relative_pointer", "no", relativeTypes}};
+const wl_message relativeEvents[] = {{"relative_motion", "uuffff", nullptr}};
+const wl_interface relativeInterface{
+    "zwp_relative_pointer_v1", 1, 1, destroyRequest, 1, relativeEvents};
+const wl_interface relativeManagerInterface{
+    "zwp_relative_pointer_manager_v1", 1, 2, relativeRequests, 0, nullptr};
+
 struct Server {
   wl_display *display = nullptr;
   wl_resource *surface = nullptr;
   wl_resource *pointer = nullptr;
+  wl_resource *lock = nullptr;
+  wl_resource *relative = nullptr;
   uint32_t version = 5;
 };
 void destroyResource(wl_client *, wl_resource *resource) {
@@ -35,7 +60,11 @@ void createSurface(wl_client *client, wl_resource *compositor, uint32_t id) {
   wl_resource_set_implementation(server->surface, &implementation, server, nullptr);
 }
 void bindCompositor(wl_client *client, void *data, uint32_t, uint32_t id) {
-  static const struct wl_compositor_interface implementation{createSurface, nullptr};
+  static const auto implementation = [] {
+    struct wl_compositor_interface value{};
+    value.create_surface = createSurface;
+    return value;
+  }();
   auto *resource = wl_resource_create(client, &wl_compositor_interface, 1, id);
   assert(resource);
   wl_resource_set_implementation(resource, &implementation, data, nullptr);
@@ -58,12 +87,69 @@ void bindSeat(wl_client *client, void *data, uint32_t, uint32_t id) {
   wl_seat_send_capabilities(resource, WL_SEAT_CAPABILITY_POINTER);
   wl_seat_send_name(resource, "isolated-pointer-test");
 }
+void createLock(wl_client *client, wl_resource *manager, uint32_t id,
+                wl_resource *surface, wl_resource *pointer, wl_resource *region,
+                uint32_t lifetime) {
+  auto *server = static_cast<Server *>(wl_resource_get_user_data(manager));
+  assert(surface == server->surface && pointer == server->pointer && !region);
+  assert(lifetime == 2);
+  server->lock = wl_resource_create(client, &lockedInterface, 1, id);
+  static void (*const implementation[])(void) = {
+      reinterpret_cast<void (*)(void)>(destroyResource)};
+  wl_resource_set_implementation(server->lock, implementation, server, nullptr);
+}
+void createRelative(wl_client *client, wl_resource *manager, uint32_t id,
+                    wl_resource *pointer) {
+  auto *server = static_cast<Server *>(wl_resource_get_user_data(manager));
+  assert(pointer == server->pointer);
+  server->relative = wl_resource_create(client, &relativeInterface, 1, id);
+  static void (*const implementation[])(void) = {
+      reinterpret_cast<void (*)(void)>(destroyResource)};
+  wl_resource_set_implementation(server->relative, implementation, server, nullptr);
+}
+void bindConstraints(wl_client *client, void *data, uint32_t, uint32_t id) {
+  auto *resource = wl_resource_create(client, &constraintsInterface, 1, id);
+  static void (*const implementation[])(void) = {
+      reinterpret_cast<void (*)(void)>(destroyResource),
+      reinterpret_cast<void (*)(void)>(createLock)};
+  wl_resource_set_implementation(resource, implementation, data, nullptr);
+}
+void bindRelative(wl_client *client, void *data, uint32_t, uint32_t id) {
+  auto *resource = wl_resource_create(client, &relativeManagerInterface, 1, id);
+  static void (*const implementation[])(void) = {
+      reinterpret_cast<void (*)(void)>(destroyResource),
+      reinterpret_cast<void (*)(void)>(createRelative)};
+  wl_resource_set_implementation(resource, implementation, data, nullptr);
+}
 int commands(int descriptor, uint32_t, void *data) {
   auto *server = static_cast<Server *>(data);
   char command;
   assert(read(descriptor, &command, 1) == 1);
   if (command == 'Q') {
     wl_display_terminate(server->display);
+  } else if (command == 'L' || command == 'U') {
+    assert(server->lock && server->relative);
+    if (command == 'L') {
+      wl_pointer_send_motion(server->pointer, 101,
+          wl_fixed_from_double(100), wl_fixed_from_double(100));
+      wl_resource_post_event(server->lock, 0);
+      wl_resource_post_event(server->relative, 0, 0u, 102u,
+          wl_fixed_from_double(17), wl_fixed_from_double(-9),
+          wl_fixed_from_double(17), wl_fixed_from_double(-9));
+      wl_pointer_send_leave(server->pointer, 21, server->surface);
+    } else {
+      wl_resource_post_event(server->lock, 1);
+    }
+    // Lock freezes the host coordinate while its relative cursor has moved.
+    wl_pointer_send_enter(server->pointer, 22, server->surface,
+        wl_fixed_from_double(command == 'L' ? 100 : 200),
+        wl_fixed_from_double(command == 'L' ? 100 : 150));
+    wl_pointer_send_button(server->pointer, 23, 103, 0x110,
+                           WL_POINTER_BUTTON_STATE_PRESSED);
+    wl_pointer_send_button(server->pointer, 24, 104, 0x110,
+                           WL_POINTER_BUTTON_STATE_RELEASED);
+    wl_pointer_send_frame(server->pointer);
+    wl_display_flush_clients(server->display);
   } else {
     assert(command == 'E' && server->surface && server->pointer);
     const std::pair<double, double> points[] = {{37.25, 81.5}, {361.75, 19.25}};
@@ -95,6 +181,8 @@ int commands(int descriptor, uint32_t, void *data) {
 struct Client {
   wl_compositor *compositor = nullptr;
   wl_seat *seat = nullptr;
+  wl_proxy *constraints = nullptr;
+  wl_proxy *relativeManager = nullptr;
   bool capability = false;
   bool named = false;
   uint32_t version = 5;
@@ -117,6 +205,12 @@ void global(void *data, wl_registry *registry, uint32_t id, const char *name,
     static const wl_seat_listener listener{capabilities, seatName};
     assert(wl_seat_add_listener(client->seat, &listener, client) == 0);
   }
+  if (std::strcmp(name, constraintsInterface.name) == 0)
+    client->constraints = static_cast<wl_proxy *>(
+        wl_registry_bind(registry, id, &constraintsInterface, 1));
+  if (std::strcmp(name, relativeManagerInterface.name) == 0)
+    client->relativeManager = static_cast<wl_proxy *>(
+        wl_registry_bind(registry, id, &relativeManagerInterface, 1));
 }
 void globalRemoved(void *, wl_registry *, uint32_t) {}
 struct Position {
@@ -144,6 +238,19 @@ void button(void *data, wl_pointer *, uint32_t, uint32_t, uint32_t code,
 }
 void frame(void *data, wl_pointer *) {
   static_cast<Position *>(data)->events += 'F';
+}
+void locked(void *data, wl_proxy *) {
+  static_cast<Position *>(data)->events += 'K';
+}
+void unlocked(void *data, wl_proxy *) {
+  static_cast<Position *>(data)->events += 'N';
+}
+void relativeMotion(void *data, wl_proxy *, uint32_t, uint32_t,
+                    wl_fixed_t dx, wl_fixed_t dy, wl_fixed_t, wl_fixed_t) {
+  auto *state = static_cast<Position *>(data);
+  state->events += 'R';
+  state->position.first += wl_fixed_to_double(dx);
+  state->position.second += wl_fixed_to_double(dy);
 }
 #ifdef WL_POINTER_WARP_SINCE_VERSION
 void warp(void *data, wl_pointer *, wl_fixed_t x, wl_fixed_t y) {
@@ -180,6 +287,8 @@ int main(int argc, char **argv) {
   assert(wl_global_create(server.display, &wl_compositor_interface, 1, &server,
                           bindCompositor));
   assert(wl_global_create(server.display, &wl_seat_interface, version, &server, bindSeat));
+  assert(wl_global_create(server.display, &constraintsInterface, 1, &server, bindConstraints));
+  assert(wl_global_create(server.display, &relativeManagerInterface, 1, &server, bindRelative));
   auto *source = wl_event_loop_add_fd(wl_display_get_event_loop(server.display),
                                      mailbox[0], WL_EVENT_READABLE, commands, &server);
   assert(source);
@@ -223,6 +332,41 @@ int main(int argc, char **argv) {
                                                {361.75, 19.25}, {361.75, 19.25}}
       : std::vector<std::pair<double, double>>(4, {-20, -30});
   assert(current.clicks == expected);
+  auto *lock = wl_proxy_marshal_flags(client.constraints, 1, &lockedInterface,
+      1, 0, nullptr, surface, pointer, nullptr, 2u);
+  auto *relative = wl_proxy_marshal_flags(client.relativeManager, 1,
+      &relativeInterface, 1, 0, nullptr, pointer);
+  assert(lock && relative);
+  void (*lockCallbacks[])(void) = {reinterpret_cast<void (*)(void)>(locked),
+                                  reinterpret_cast<void (*)(void)>(unlocked)};
+  void (*relativeCallbacks[])(void) = {
+      reinterpret_cast<void (*)(void)>(relativeMotion)};
+  assert(wl_proxy_add_listener(lock, lockCallbacks, &original) == 0);
+  assert(wl_proxy_get_listener(lock) == lockCallbacks);
+  wl_proxy_set_user_data(lock, &current);
+  assert(wl_proxy_add_listener(relative, relativeCallbacks, &current) == 0);
+  assert(wl_display_roundtrip(display) >= 0);
+  current.events.clear();
+  current.clicks.clear();
+  assert(write(mailbox[1], "L", 1) == 1);
+  while (current.events.size() < 8)
+    assert(wl_display_dispatch(display) >= 0);
+  assert(current.events == "MKRLEDUF");
+  assert((current.clicks == std::vector<std::pair<double, double>>(2, {117, 91})));
+  assert(original.events.empty());
+  current.events.clear();
+  current.clicks.clear();
+  assert(write(mailbox[1], "U", 1) == 1);
+  const std::string unlockedEvents = patched ? "NEMDUF" : "NEDUF";
+  while (current.events.size() < unlockedEvents.size())
+    assert(wl_display_dispatch(display) >= 0);
+  assert(current.events == unlockedEvents);
+  assert((current.clicks == std::vector<std::pair<double, double>>(
+      2, patched ? std::pair<double, double>{200, 150} : std::pair<double, double>{117, 91})));
+  wl_proxy_marshal_flags(lock, 0, nullptr, 1, WL_MARSHAL_FLAG_DESTROY);
+  wl_proxy_marshal_flags(relative, 0, nullptr, 1, WL_MARSHAL_FLAG_DESTROY);
+  wl_proxy_marshal_flags(client.constraints, 0, nullptr, 1, WL_MARSHAL_FLAG_DESTROY);
+  wl_proxy_marshal_flags(client.relativeManager, 0, nullptr, 1, WL_MARSHAL_FLAG_DESTROY);
   wl_pointer_release(pointer);
   wl_surface_destroy(surface);
   wl_seat_release(client.seat);

@@ -3,9 +3,13 @@
 import argparse
 import base64
 import contextlib
+import csv
+import hashlib
 import io
 import json
+import math
 import os
+import re
 import select
 import subprocess
 import time
@@ -26,6 +30,206 @@ from runtime import (
     session_identity,
     start,
 )
+
+CHART_TARGETS = (
+    ("ChartInput-red", (203, 41, 97), (100, 62)),
+    ("ChartInput-blue", (43, 83, 211), (270, 62)),
+)
+CHART_COMPILE = r"""set -euo pipefail
+export DISPLAY=:99 WINEDEBUG=-all LIBGL_ALWAYS_SOFTWARE=1
+Xvfb :99 -screen 0 1920x1080x24 -nolisten tcp -ac >/out/xvfb.log 2>&1 &
+display_pid=$!
+trap 'kill "$display_pid" 2>/dev/null || true' EXIT
+for ((attempt=0; attempt<100; attempt++)); do
+    if xdpyinfo >/dev/null 2>&1; then break; fi
+    sleep 0.1
+done
+xdpyinfo >/dev/null
+mkdir -p /home/plasma/.wine/drive_c/MT5/MQL5/Experts
+cp /ChartInput.mq5 /home/plasma/.wine/drive_c/MT5/MQL5/Experts/
+set +e
+timeout 120 wine 'C:\MT5\metaeditor64.exe' /portable '/compile:C:\MT5\MQL5\Experts\ChartInput.mq5' /log
+status=$?
+set -e
+wineserver -k -w
+[[ $status == 0 || $status == 1 ]]
+cp /home/plasma/.wine/drive_c/MT5/MQL5/Experts/ChartInput.{ex5,log} /out/
+"""
+
+
+def compile_chart(runtime, image, output):
+    """Compile before test boot: MetaEditor must never refresh the failing window."""
+    output.mkdir()
+    # Hosted runners can use uid 1001; the disposable compiler uses plasma/1000.
+    output.chmod(0o777)
+    source = Path(__file__).with_name("ChartInput.mq5").resolve()
+    result = execute(
+        runtime,
+        "run",
+        "--rm",
+        "--network=none",
+        "--user=plasma",
+        "--entrypoint=/bin/bash",
+        "--mount",
+        f"type=bind,source={source},target=/ChartInput.mq5,readonly",
+        "--mount",
+        f"type=bind,source={output},target=/out",
+        image,
+        "-c",
+        CHART_COMPILE,
+        check=False,
+    )
+    (output / "compiler.log").write_bytes(result.stdout + result.stderr)
+    result.check_returncode()
+    binary = output / "ChartInput.ex5"
+    log = (output / "ChartInput.log").read_text(encoding="utf-16")
+    if not binary.read_bytes() or not re.search(r"\b0 errors?,\s*0 warnings?,", log):
+        raise RuntimeError(
+            "ChartInput compilation needs a fresh binary and zero errors"
+        )
+    (output / "sha256.json").write_text(
+        json.dumps(
+            {
+                "source": hashlib.sha256(source.read_bytes()).hexdigest(),
+                "binary": hashlib.sha256(binary.read_bytes()).hexdigest(),
+            },
+            indent=2,
+        )
+        + "\n"
+    )
+    config = output / "autologin.ini"
+    config.write_text(
+        "[Common]\nKeepPrivate=1\nNewsEnable=0\n[Experts]\nEnabled=1\n"
+        "AllowLiveTrading=0\nAllowDllImport=0\n[StartUp]\n"
+        "Expert=ChartInput.ex5\nSymbol=EURUSD\nPeriod=M15\n"
+    )
+    return binary, config
+
+
+def chart_target(image, color, scale=1):
+    difference = ImageChops.difference(
+        image.convert("RGB"), Image.new("RGB", image.size, color)
+    )
+    red, green, blue = difference.split()
+    bounds = (
+        ImageChops.lighter(red, ImageChops.lighter(green, blue))
+        .point(lambda value: 255 if value < 3 else 0)
+        .getbbox()
+    )
+    width, height = (math.ceil(size * max(1, scale)) for size in (120, 44))
+    if not bounds or not (
+        20 <= bounds[2] - bounds[0] <= width and 12 <= bounds[3] - bounds[1] <= height
+    ):
+        raise RuntimeError("Chart input target is absent from the screenshot")
+    return bounds
+
+
+def chart_events(runtime, container, output):
+    result = execute(
+        runtime,
+        "exec",
+        container,
+        "cat",
+        "/home/plasma/.wine/drive_c/MT5/MQL5/Files/chart-input.csv",
+        check=False,
+    )
+    (output / "chart-input.csv").write_bytes(result.stdout)
+    if result.returncode and b"No such file or directory" in result.stderr:
+        return []
+    result.check_returncode()
+    text = result.stdout.decode("utf-8-sig")
+    if not text:
+        return []
+    reader = csv.DictReader(io.StringIO(text), delimiter=";")
+    if reader.fieldnames != ["event", "name", "x", "y"]:
+        raise RuntimeError("Invalid ChartInput CSV header")
+    return list(reader)
+
+
+def autologin_input(runtime, container, client, probe, output, target_scale=1):
+    state = wait_state(probe, lambda value: bool(value["main"]), timeout=120)
+    if not state["main_enabled"] or state["dialogs"]:
+        raise RuntimeError("Autologin regression must start without a native dialog")
+    deadline = time.monotonic() + 30
+    attempts = []
+    while True:
+        ready = any(
+            row["event"] == "READY" for row in chart_events(runtime, container, output)
+        )
+        image = client.screenshot()
+        capture = f"startup-attempt-{len(attempts) + 1}.png"
+        image.save(output / capture)
+        targets, reason = [], "ChartInput READY event is absent"
+        try:
+            targets = [
+                (name, chart_target(image, color, target_scale), expected)
+                for name, color, expected in CHART_TARGETS
+            ]
+        except RuntimeError as error:
+            reason = str(error)
+        attempts.append(
+            {
+                "capture": capture,
+                "ready": ready,
+                "targets_visible": bool(targets),
+                "reason": None if ready and targets else reason,
+            }
+        )
+        (output / "startup-attempts.json").write_text(
+            json.dumps(attempts, indent=2) + "\n"
+        )
+        if ready and targets:
+            image.save(output / "startup.png")
+            break
+        if time.monotonic() >= deadline:
+            raise RuntimeError(
+                "ChartInput did not initialize visibly without a native dialog: "
+                + reason
+            )
+        time.sleep(0.1)
+    evidence = []
+    for name, bounds, expected in targets:
+        point = center(bounds)
+        client.click(*point)
+        deadline = time.monotonic() + 5
+        while True:
+            events = chart_events(runtime, container, output)
+            matches = [
+                row
+                for row in events
+                if row["event"] == "OBJECT_CLICK" and row["name"] == name
+            ]
+            if matches:
+                event = matches[-1]
+                observed = [float(event[axis]) for axis in ("x", "y")]
+                passed = all(
+                    abs(observed[index] - expected[index]) <= 1 for index in range(2)
+                )
+                break
+            if time.monotonic() >= deadline:
+                observed, passed = None, False
+                break
+            time.sleep(0.1)
+        client.screenshot().save(output / f"{name}.png")
+        evidence.append(
+            {
+                "target": name,
+                "bounds": bounds,
+                "click": point,
+                "expected_chart_coordinates": expected,
+                "observed": observed,
+                "passed": passed,
+            }
+        )
+        (output / "chart-input.json").write_text(json.dumps(evidence, indent=2) + "\n")
+        if not passed:
+            raise RuntimeError("MT5 chart input disagrees with its visible target")
+    return {
+        "passed": True,
+        "startup": "autologin",
+        "targets": evidence,
+        "oracle": "Screenshot colors and MT5 OnChartEvent; no dialog before clicks",
+    }
 
 
 class BrowserClient:
@@ -674,12 +878,16 @@ def exercise(client, probe, output):
 
 def main(args):
     scales = getattr(args, "pointer_scales", None)
+    autologin = getattr(args, "startup", "dialog") == "autologin"
     if scales and (set(args.modes) != {"nested"} or not args.parent_image):
         raise ValueError(
             "--pointer-scales requires --modes nested and a decorated --parent-image"
         )
     root = Path(args.output).resolve() / args.case
     root.mkdir(parents=True, exist_ok=False)
+    expert = (
+        compile_chart(args.runtime, args.image, root / "compile") if autologin else None
+    )
     parent_output = root / "parent"
     parent_output.mkdir()
     (parent_output / "runtime").mkdir(mode=0o700)
@@ -752,6 +960,25 @@ def main(args):
                     "-e",
                     "MT5_SERVER=",
                 ]
+                if expert:
+                    binary, config = expert
+                    extra = [
+                        f"--network={network}",
+                        "-e",
+                        "MT5_ACCOUNT=1",
+                        "-e",
+                        "MT5_LOGIN=1",
+                        "-e",
+                        "MT5_PASSWORD=isolated-test-only",
+                        "-e",
+                        "MT5_SERVER=ICMarketsEU-Demo",
+                        "-e",
+                        "MT5_CONFIG_FILE=/etc/mt5/autologin.ini",
+                        "--mount",
+                        f"type=bind,source={config},target=/etc/mt5/autologin.ini,readonly",
+                        "--mount",
+                        f"type=bind,source={binary},target=/run/mt5-test/ChartInput.ex5,readonly",
+                    ]
                 for unit in ("mt5-native-mcp.socket", "mt5-editor-mcp.socket"):
                     extra += [
                         "--mount",
@@ -811,7 +1038,7 @@ def main(args):
                     else connect(args.runtime, name, mode, output)
                 )
                 probe = Probe(args.runtime, name, output)
-                if driver:
+                if driver and not autologin:
                     driver.require_decoration = (
                         backend == "wayland" and host == "wayland"
                     )
@@ -839,8 +1066,19 @@ def main(args):
                         viewport_anchor=viewport_anchor,
                     )
                     report["viewport"] = client.viewport()
-                report["input"] = exercise(client, probe, output)
-                if driver:
+                report["input"] = (
+                    autologin_input(
+                        args.runtime,
+                        name,
+                        client,
+                        probe,
+                        output,
+                        target_scale=scale or 1,
+                    )
+                    if autologin
+                    else exercise(client, probe, output)
+                )
+                if driver and not autologin:
                     report["resized"] = resized_input(
                         client,
                         probe,
@@ -927,6 +1165,7 @@ if __name__ == "__main__":
         "--backends", nargs="+", choices=("wayland", "x11"), default=["wayland", "x11"]
     )
     parser.add_argument("--gpu", action="store_true")
+    parser.add_argument("--startup", choices=("dialog", "autologin"), default="dialog")
     parser.add_argument("--pointer-scales", nargs="+", type=float, choices=(1, 1.25, 2))
     parser.add_argument(
         "--modes",

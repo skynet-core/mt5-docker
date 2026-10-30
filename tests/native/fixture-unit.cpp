@@ -139,6 +139,7 @@ int main(int argc, char **argv) {
       auto *window = QApplication::topLevelWidgets().value(0);
       assert(window);
       window->activateWindow();
+      assert(QTest::qWaitForWindowActive(window, 1000));
       if (scenario.startsWith("text")) {
         auto *editor = window->findChild<QTextEdit *>();
         assert(editor);

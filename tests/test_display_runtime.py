@@ -1,5 +1,6 @@
 """Regressions for the local policy changes to the vendored display runtime."""
 
+import configparser
 import importlib.machinery
 import importlib.util
 import os
@@ -34,6 +35,37 @@ GPU_LOADER.exec_module(GPU)
 
 
 class RenderingPolicyTests(unittest.TestCase):
+    def test_mt5_uses_borderless_maximization_without_forcing_wine_fullscreen(self):
+        for executable, mt5 in (
+            ("/usr/local/bin/mt5-launch", True),
+            ("/usr/bin/chromium", False),
+            ("/usr/bin/wine", False),
+            ("/usr/local/bin/mt5-launch-other", False),
+        ):
+            with (
+                self.subTest(executable=executable),
+                tempfile.TemporaryDirectory() as directory,
+                patch.dict(os.environ, {"XDG_CONFIG_HOME": directory}),
+            ):
+                APP.configure(executable)
+                config = configparser.ConfigParser()
+                config.read(Path(directory) / "kwinrulesrc")
+                rule = config["1"]
+                self.assertEqual(rule["types"], "1")
+                self.assertEqual(rule["noborder"], "true")
+                self.assertEqual(rule["noborderrule"], "2")
+                if mt5:
+                    self.assertNotIn("fullscreen", rule)
+                    self.assertNotIn("fullscreenrule", rule)
+                    for axis in ("horiz", "vert"):
+                        self.assertEqual(rule[f"maximize{axis}"], "true")
+                        self.assertEqual(rule[f"maximize{axis}rule"], "2")
+                else:
+                    self.assertEqual(rule["fullscreen"], "true")
+                    self.assertEqual(rule["fullscreenrule"], "2")
+                    self.assertNotIn("maximizehoriz", rule)
+                    self.assertNotIn("maximizevert", rule)
+
     def test_x11_viewer_passes_shortcut_keys_through_old_and_new_versions(self):
         helper = SOURCE.parent / "plasma-nested-x11"
         with tempfile.TemporaryDirectory() as directory:

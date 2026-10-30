@@ -12,6 +12,7 @@
 #include <unistd.h>
 #include <vector>
 #include <wayland-client-protocol.h>
+#include <wayland-version.h>
 
 extern "C" void __gcov_dump();
 
@@ -48,6 +49,9 @@ struct Proxy {
   void *data = nullptr;
   const void *implementation = nullptr;
   wl_dispatcher_func_t dispatcher = nullptr;
+  uint32_t id = 1;
+  wl_display *display = reinterpret_cast<wl_display *>(0x8000);
+  const wl_interface *interface = nullptr;
 };
 
 extern "C" const char *wl_proxy_get_class(wl_proxy *proxy) {
@@ -59,6 +63,32 @@ extern "C" void *wl_proxy_get_user_data(wl_proxy *proxy) {
 extern "C" uint32_t wl_proxy_get_version(wl_proxy *proxy) {
   return reinterpret_cast<Proxy *>(proxy)->version;
 }
+extern "C" uint32_t wl_proxy_get_id(wl_proxy *proxy) {
+  return reinterpret_cast<Proxy *>(proxy)->id;
+}
+extern "C" wl_display *wl_proxy_get_display(wl_proxy *proxy) {
+  return reinterpret_cast<Proxy *>(proxy)->display;
+}
+#if WAYLAND_VERSION_MAJOR > 1 || WAYLAND_VERSION_MINOR >= 24
+extern "C" const wl_interface *wl_proxy_get_interface(wl_proxy *proxy) {
+  return reinterpret_cast<Proxy *>(proxy)->interface;
+}
+#endif
+
+wl_proxy *createdProxy = nullptr;
+wl_proxy *destroyedProxy = nullptr;
+wl_display *disconnectedDisplay = nullptr;
+size_t forwardedCount = 0;
+std::vector<wl_argument> forwarded;
+wl_proxy *marshal(wl_proxy *, uint32_t, const wl_interface *, uint32_t,
+                  uint32_t, wl_argument *arguments) {
+  forwarded.clear();
+  if (forwardedCount)
+    forwarded.assign(arguments, arguments + forwardedCount);
+  return createdProxy;
+}
+void destroy(wl_proxy *proxy) { destroyedProxy = proxy; }
+void disconnect(wl_display *display) { disconnectedDisplay = display; }
 
 int addDispatcher(wl_proxy *proxy, wl_dispatcher_func_t dispatcher,
                   const void *implementation, void *data) {
@@ -82,6 +112,12 @@ extern "C" void *dlsym(void *library, const char *name) noexcept {
   if (std::strcmp(name, "wl_proxy_add_dispatcher") == 0)
     return scenario("dispatcher-missing") ? nullptr
         : reinterpret_cast<void *>(addDispatcher);
+  if (std::strcmp(name, "wl_proxy_marshal_array_flags") == 0)
+    return reinterpret_cast<void *>(marshal);
+  if (std::strcmp(name, "wl_proxy_destroy") == 0)
+    return reinterpret_cast<void *>(destroy);
+  if (std::strcmp(name, "wl_display_disconnect") == 0)
+    return reinterpret_cast<void *>(disconnect);
   assert(std::strcmp(name, "wl_proxy_add_listener") == 0);
   return scenario("listener-missing") ? nullptr
       : reinterpret_cast<void *>(addListener);
@@ -141,6 +177,12 @@ void relative(void *data, wl_pointer *pointer, uint32_t direction, uint32_t valu
 #endif
 void warped(void *data, wl_pointer *pointer, wl_fixed_t x, wl_fixed_t y) {
   record(11, data, pointer, {x, y});
+}
+void locked(void *data, wl_proxy *proxy) {
+  record(100, data, reinterpret_cast<wl_pointer *>(proxy));
+}
+void unlocked(void *data, wl_proxy *proxy) {
+  record(101, data, reinterpret_cast<wl_pointer *>(proxy));
 }
 struct CurrentListener {
   wl_pointer_listener base{};
@@ -290,4 +332,113 @@ int main() {
   empty.enter = entered;
   assert(pointer.dispatcher(&empty, &pointer, 0, nullptr, arguments) == 0);
   assert(events.size() == count + 1 && events.at(count).opcode == 0);
+
+  // Each lock belongs to its actual display/pointer, not every seat in KWin.
+  const wl_interface lockInterface{"zwp_locked_pointer_v1", 1, 0, nullptr, 0, nullptr};
+  Proxy constraints{"zwp_pointer_constraints_v1"}, surface{"wl_surface"};
+  constraints.id = 10;
+  surface.id = 11;
+  pointer.id = 12;
+  Proxy lock{"zwp_locked_pointer_v1"}, second{"zwp_locked_pointer_v1"};
+  lock.id = 13;
+  second.id = 14;
+  wl_argument request[5]{};
+  request[1].o = reinterpret_cast<wl_object *>(&surface);
+  request[2].o = reinterpret_cast<wl_object *>(&pointer);
+  auto create = [&](Proxy &target) {
+    createdProxy = reinterpret_cast<wl_proxy *>(&target);
+    assert(wl_proxy_marshal_array_flags(reinterpret_cast<wl_proxy *>(&constraints),
+        1, &lockInterface, 1, 0, request) == createdProxy);
+  };
+  auto enterPointer = [&](Proxy &target, size_t expectedEvents) {
+    events.clear();
+    assert(dispatchPointer(&listener, &target, 0, nullptr, arguments) == 0);
+    assert(events.size() == expectedEvents && events.front().opcode == 0);
+  };
+  void (*lockCallbacks[])(void) = {reinterpret_cast<void (*)(void)>(locked),
+                                  reinterpret_cast<void (*)(void)>(unlocked)};
+  create(lock);
+  assert(locks().objects.size() == 1);
+  assert(wl_proxy_add_listener(reinterpret_cast<wl_proxy *>(&lock),
+                               lockCallbacks, &first) == 0);
+  lock.data = &current;
+  enterPointer(pointer, 2); // A requested lock is not active until confirmed.
+  assert(lock.dispatcher(lockCallbacks, &lock, 0, nullptr, nullptr) == 0);
+  assert(events.back().opcode == 100 && events.back().data == &current);
+  enterPointer(pointer, 1);
+  Proxy anotherPointer{"wl_pointer"};
+  anotherPointer.id = 15;
+  enterPointer(anotherPointer, 2);
+  anotherPointer.id = pointer.id;
+  anotherPointer.display = reinterpret_cast<wl_display *>(0x9000);
+  enterPointer(anotherPointer, 2);
+  assert(lock.dispatcher(lockCallbacks, &lock, 1, nullptr, nullptr) == 0);
+  assert(events.back().opcode == 101 && events.back().data == &current);
+  enterPointer(pointer, 2);
+  assert(lock.dispatcher(lockCallbacks, &lock, 99, nullptr, nullptr) == -1);
+  void (*noCallbacks[])(void) = {nullptr, nullptr};
+  assert(lock.dispatcher(noCallbacks, &lock, 0, nullptr, nullptr) == 0);
+  enterPointer(pointer, 1);
+  create(second);
+  assert(dispatchLock(noCallbacks, &second, 0, nullptr, nullptr) == 0);
+  assert(lock.dispatcher(lockCallbacks, &lock, 1, nullptr, nullptr) == 0);
+  enterPointer(pointer, 1); // Another active lock for this pointer survives.
+  createdProxy = nullptr;
+  assert(wl_proxy_marshal_array_flags(reinterpret_cast<wl_proxy *>(&second),
+      0, nullptr, 1, WL_MARSHAL_FLAG_DESTROY, nullptr) == nullptr);
+  enterPointer(pointer, 2);
+  wl_proxy_destroy(reinterpret_cast<wl_proxy *>(&lock));
+  assert(destroyedProxy == reinterpret_cast<wl_proxy *>(&lock));
+  assert(locks().objects.empty());
+  create(lock);
+  assert(dispatchLock(noCallbacks, &lock, 0, nullptr, nullptr) == 0);
+  wl_proxy_destroy(reinterpret_cast<wl_proxy *>(&surface));
+  enterPointer(pointer, 2);
+  create(lock);
+  assert(dispatchLock(noCallbacks, &lock, 0, nullptr, nullptr) == 0);
+  wl_proxy_destroy(proxy);
+  enterPointer(pointer, 2);
+  create(lock);
+  assert(dispatchLock(noCallbacks, &lock, 0, nullptr, nullptr) == 0);
+  second.display = anotherPointer.display;
+  create(second);
+  assert(dispatchLock(noCallbacks, &second, 0, nullptr, nullptr) == 0);
+  wl_display_disconnect(pointer.display);
+  assert(disconnectedDisplay == pointer.display && locks().objects.size() == 1);
+  enterPointer(pointer, 2);
+  enterPointer(anotherPointer, 1);
+  wl_display_disconnect(anotherPointer.display);
+  assert(locks().objects.empty());
+  // Failed/other constructors and unrelated destructors never leave state.
+  assert(dispatchLock(lockCallbacks, &lock, 0, nullptr, nullptr) == 0);
+  createdProxy = nullptr;
+  wl_proxy_marshal_array_flags(reinterpret_cast<wl_proxy *>(&constraints),
+      1, &lockInterface, 1, 0, request);
+  createdProxy = proxy;
+  wl_proxy_marshal_array_flags(proxy, 1, &lockInterface, 1, 0, request);
+  wl_proxy_marshal_array_flags(reinterpret_cast<wl_proxy *>(&constraints),
+      0, &lockInterface, 1, 0, request);
+  wl_proxy_marshal_array_flags(proxy, 0, &wl_pointer_interface, 1, 0, nullptr);
+  wl_proxy_marshal_array_flags(proxy, 0, nullptr, 1, 0, nullptr);
+  assert(locks().objects.empty());
+#if WAYLAND_VERSION_MAJOR > 1 || WAYLAND_VERSION_MINOR >= 24
+  // All public wire argument types, nullable objects and version prefixes.
+  const wl_message requests[] = {{"all", "12iufs?onah", nullptr},
+                                  {"empty", "", nullptr}};
+  const wl_interface requestInterface{"test", 12, 2, requests, 0, nullptr};
+  pointer.interface = &requestInterface;
+  wl_array array{};
+  auto *object = reinterpret_cast<wl_object *>(0x4444);
+  forwardedCount = 8;
+  assert(wl_proxy_marshal_flags(proxy, 0, nullptr, 12, 0,
+      -17, 42u, wl_fixed_from_double(1.5), "value", nullptr, object,
+      &array, 9) == proxy);
+  assert(forwarded.size() == 8 && forwarded[0].i == -17 &&
+         forwarded[1].u == 42 && forwarded[2].f == wl_fixed_from_double(1.5));
+  assert(std::strcmp(forwarded[3].s, "value") == 0 && !forwarded[4].o &&
+         forwarded[5].o == object && forwarded[6].a == &array &&
+         forwarded[7].h == 9);
+  forwardedCount = 0;
+  assert(wl_proxy_marshal_flags(proxy, 1, nullptr, 12, 0) == proxy);
+#endif
 }

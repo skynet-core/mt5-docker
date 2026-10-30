@@ -303,6 +303,24 @@ jobs:
             --case "$DISTRO" --output artifacts/pointer-matrix \
             --modes nested --pointer-scales 1 1.25 2
 
+      - name: Verify first chart input without a masking startup dialog
+        env:
+          PLAYWRIGHT_BROWSERS_PATH: ${{ runner.temp }}/mt5-playwright
+        run: |
+          uv run --locked python tests/mt5_input.py \
+            --image "$IMAGE" --parent-image "$FIXTURE_IMAGE" \
+            --case "$DISTRO" --output artifacts/mt5-autologin-input \
+            --startup autologin
+
+      - name: Verify scaled chart input without a masking startup dialog
+        env:
+          PLAYWRIGHT_BROWSERS_PATH: ${{ runner.temp }}/mt5-playwright
+        run: |
+          uv run --locked python tests/mt5_input.py \
+            --image "$IMAGE" --parent-image "$POINTER_PARENT_IMAGE" \
+            --case "$DISTRO" --output artifacts/autologin-pointer-matrix \
+            --modes nested --pointer-scales 1 1.25 2 --startup autologin
+
       - name: Verify broker login, MCP and expert backtests in all eight modes
         if: steps.policy.outputs.publish == 'true'
         env:
@@ -349,6 +367,8 @@ jobs:
             artifacts/smoke/
             artifacts/display-matrix/
             artifacts/mt5-input/
+            artifacts/mt5-autologin-input/
+            artifacts/autologin-pointer-matrix/
             artifacts/pointer-matrix/
             artifacts/tested-image-id.txt
             artifacts/broker/*/chart.png
@@ -360,6 +380,12 @@ jobs:
             !artifacts/mt5-input/**/parent/runtime/**
             !artifacts/mt5-input/**/parent/x11/**
             !artifacts/mt5-input/**/parent/Xauthority
+            !artifacts/mt5-autologin-input/**/parent/runtime/**
+            !artifacts/mt5-autologin-input/**/parent/x11/**
+            !artifacts/mt5-autologin-input/**/parent/Xauthority
+            !artifacts/autologin-pointer-matrix/**/parent/runtime/**
+            !artifacts/autologin-pointer-matrix/**/parent/x11/**
+            !artifacts/autologin-pointer-matrix/**/parent/Xauthority
             !artifacts/pointer-matrix/**/parent/runtime/**
             !artifacts/pointer-matrix/**/parent/x11/**
             !artifacts/pointer-matrix/**/parent/Xauthority

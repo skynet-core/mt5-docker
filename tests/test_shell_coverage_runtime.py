@@ -212,6 +212,50 @@ class ShellRuntimeTests(unittest.TestCase):
         self.assertIn("MT5_TEST_GPU must be 0 or 1", result.stderr)
         self.assertEqual(commands, [])
 
+    def test_isolated_chart_fixture_uses_owned_parents_and_copy_failures_stop_init(
+        self,
+    ):
+        for failure in ("", "directories", "copy"):
+            with self.subTest(failure=failure):
+
+                def setup(root):
+                    (root / "fixture").mkdir()
+                    (root / "fixture/ChartInput.ex5").write_bytes(
+                        b"compiled chart fixture"
+                    )
+
+                result, commands, _, files = self.run_source(
+                    ROOT / "tests/isolated-entrypoint.sh",
+                    environment={"TEST_FAIL": failure},
+                    replacements=(
+                        ("/dev", "dev"),
+                        ("/run/mt5-test", "fixture"),
+                        ("/home/plasma/.wine", "wine"),
+                    ),
+                    before=ISOLATION_BOUNDARIES + 'install() { record install "$@"; '
+                    "if [[ ${TEST_FAIL:-} == directories && $1 == -d || ${TEST_FAIL:-} == copy && $1 == -m ]]; then return 37; fi; "
+                    'if [[ $1 == -d ]]; then command mkdir -p "${@: -3}"; else command cp "${@: -2}"; fi; }\n',
+                    setup=setup,
+                )
+                self.assertEqual(result.returncode, 37 if failure else 0, result.stderr)
+                installs = [command for command in commands if command[0] == "install"]
+                self.assertEqual(
+                    installs[0][1:6], ["-d", "-o", "plasma", "-g", "plasma"]
+                )
+                self.assertEqual(len(installs[0][-3:]), 3)
+                if failure:
+                    self.assertNotIn(
+                        "/init.d/init.sh", [command[0] for command in commands]
+                    )
+                else:
+                    self.assertEqual(
+                        installs[1][1:7], ["-m", "0644", "-o", "plasma", "-g", "plasma"]
+                    )
+                    self.assertEqual(
+                        files["wine/drive_c/MT5/MQL5/Experts/ChartInput.ex5"],
+                        b"compiled chart fixture",
+                    )
+
     def test_isolated_startup_fails_closed_when_device_masking_or_init_fails(self):
         def setup(root):
             (root / "dev").mkdir()
