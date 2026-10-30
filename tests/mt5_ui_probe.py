@@ -86,18 +86,24 @@ def edit_text(window, user=None):
     return buffer.value
 
 
+def window_dpi(window, user=None):
+    user = user or ctypes.windll.user32
+    query = user.GetDpiForWindow
+    query.argtypes = (wintypes.HWND,)
+    query.restype = wintypes.UINT
+    dpi = query(window)
+    if dpi <= 0:
+        raise RuntimeError("Cannot read MT5 window DPI")
+    return dpi
+
+
 def file_menu_fallback(window, gui, user=None):
     """Locate MT5's menu when Wine cannot inspect its foreign HMENU."""
     user = user or ctypes.windll.user32
-    get_dpi = user.GetDpiForWindow
-    get_dpi.argtypes = (wintypes.HWND,)
-    get_dpi.restype = wintypes.UINT
     metric = user.GetSystemMetricsForDpi
     metric.argtypes = (ctypes.c_int, wintypes.UINT)
     metric.restype = ctypes.c_int
-    dpi = get_dpi(window)
-    if dpi <= 0:
-        raise RuntimeError("Cannot read MT5 window DPI")
+    dpi = window_dpi(window, user)
     height = metric(15, dpi)  # SM_CYMENU; the client starts below the menu bar.
     width = round(34 * dpi / 96)
     if height <= 0 or width <= 0:
@@ -142,6 +148,7 @@ def snapshot(expected="", gui=None, process=None, read_text=edit_text):
     pid = process.GetWindowThreadProcessId(main)[1]
     result.update(
         pid=pid,
+        main_dpi=window_dpi(main) if read_focus else None,
         main_rect=gui.GetWindowRect(main),
         main_enabled=bool(gui.IsWindowEnabled(main)),
         foreground=gui.GetForegroundWindow(),

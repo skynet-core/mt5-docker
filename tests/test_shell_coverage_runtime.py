@@ -451,6 +451,13 @@ class ShellRuntimeTests(unittest.TestCase):
                 self.assertEqual(files["stopped"], b"stopped")
 
     def test_mt5_launch_publishes_only_private_display_metadata_before_wine(self):
+        def setup(root):
+            helper = root / "dpi"
+            helper.write_text(
+                "#!/bin/bash\nrecord dpi\n[[ ! -e $TEST_ROOT/mt5-environment.json ]]\n"
+            )
+            helper.chmod(0o755)
+
         before = r"""exec() {
 record "$@"
 python3 -c 'import os,stat; assert stat.S_IMODE(os.stat(os.environ["TEST_ROOT"]+"/mt5-environment.json").st_mode)==0o600'
@@ -460,13 +467,16 @@ exit 0
         result, commands, _, files = self.run_source(
             ROOT / "bin/mt5-launch",
             before=before,
+            setup=setup,
             replacements=(
                 ("/home/plasma/.wine", "prefix"),
                 ("/run/plasma/mt5-environment.json", "mt5-environment.json"),
+                ("/usr/local/libexec/mt5-dpi", "dpi"),
             ),
             environment={"MT5_PASSWORD": "never-publish-this"},
         )
         self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(commands[0], ["dpi"])
         self.assertEqual(
             commands[-1],
             [
@@ -481,6 +491,24 @@ exit 0
         self.assertEqual(metadata["WINEDEBUG"], "-all")
         self.assertNotIn("MT5_PASSWORD", metadata)
         self.assertNotIn(b"never-publish-this", files["mt5-environment.json"])
+
+    def test_mt5_launch_stops_before_mt5_when_dpi_initialization_fails(self):
+        def setup(root):
+            helper = root / "dpi"
+            helper.write_text("#!/bin/bash\nrecord dpi\nexit 37\n")
+            helper.chmod(0o755)
+
+        result, commands, _, files = self.run_source(
+            ROOT / "bin/mt5-launch",
+            setup=setup,
+            replacements=(
+                ("/usr/local/libexec/mt5-dpi", "dpi"),
+                ("/run/plasma/mt5-environment.json", "mt5-environment.json"),
+            ),
+        )
+        self.assertEqual(result.returncode, 37, result.stderr)
+        self.assertEqual(commands, [["dpi"]])
+        self.assertNotIn("mt5-environment.json", files)
 
     def test_mt5_host_arguments_preserve_private_configuration_and_secret_names(self):
         for account_file, automatic, config in (

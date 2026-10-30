@@ -4,6 +4,7 @@ set -euo pipefail
 export WINEPREFIX=/home/plasma/.wine WINEDEBUG=-all
 export WINEDLLOVERRIDES='mscoree,mshtml='
 export WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS='--disable-gpu'
+/usr/local/libexec/mt5-dpi
 python3 - <<'PYTHON'
 import json
 import os

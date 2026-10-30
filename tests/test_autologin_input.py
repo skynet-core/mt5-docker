@@ -352,7 +352,18 @@ class ChartInputTests(unittest.TestCase):
                     Path(directory) / "autologin.ini",
                 )
                 parent, child, probe, driver = Mock(), Mock(), Mock(), Mock()
-                driver.output_scale.side_effect = lambda scale: {"scale": scale}
+
+                def scale_output(scale, driver=driver):
+                    driver.output = {"scale": scale}
+                    return driver.output
+
+                driver.output_scale.side_effect = scale_output
+                probe.state.side_effect = lambda _expected, driver=driver: {
+                    "main": 123,
+                    "main_dpi": round(96 * driver.output["scale"]),
+                    "controls": [],
+                }
+                parent.screenshot.return_value = Image.new("RGB", (1600, 900), "white")
 
                 def start(
                     _runtime,

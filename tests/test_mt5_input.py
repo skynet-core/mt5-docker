@@ -13,7 +13,7 @@ import types
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, call, patch
 
 import mt5_input
 import mt5_ui_probe
@@ -27,6 +27,20 @@ def visible_image():
 
 
 class ObservationTests(unittest.TestCase):
+    def test_window_dpi_reads_original_hwnd_without_changing_awareness(self):
+        user = Mock()
+        for dpi in (96, 120, 192):
+            with self.subTest(dpi=dpi):
+                user.GetDpiForWindow.return_value = dpi
+                self.assertEqual(mt5_ui_probe.window_dpi(123, user), dpi)
+                user.GetDpiForWindow.assert_called_with(123)
+        user.SetThreadDpiAwarenessContext.assert_not_called()
+        with patch.object(ctypes, "windll", SimpleNamespace(user32=user), create=True):
+            self.assertEqual(mt5_ui_probe.window_dpi(123), 192)
+        user.GetDpiForWindow.return_value = 0
+        with self.assertRaisesRegex(RuntimeError, "window DPI"):
+            mt5_ui_probe.window_dpi(123, user)
+
     def test_cursor_observation_uses_physical_coordinates_and_per_monitor_awareness(
         self,
     ):
@@ -310,12 +324,15 @@ class ObservationTests(unittest.TestCase):
                 "physical_desktop",
                 return_value={"pointer": [321, 123], "desktop": [0, 0, 1280, 960]},
             ),
+            patch.object(mt5_ui_probe, "window_dpi", return_value=192) as read_dpi,
         ):
             state = mt5_ui_probe.snapshot(read_text=lambda _window: "")
         self.assertEqual(state["main"], 100)
         self.assertEqual(state["pointer"], [321, 123])
         self.assertEqual(state["focus"], 202)
         self.assertTrue(state["menu_mode"])
+        self.assertEqual(state["main_dpi"], 192)
+        read_dpi.assert_called_once_with(100)
         read_thread.assert_called_once_with(1)
         self.assertTrue(all(not item.get("matches") for item in state["controls"]))
 
@@ -705,6 +722,77 @@ class BrowserTransportTests(unittest.TestCase):
 
 
 class ProbeTransportTests(unittest.TestCase):
+    def test_probe_waits_only_for_missing_metadata_before_starting_wine(self):
+        missing = subprocess.CalledProcessError(
+            1,
+            "cat",
+            stderr=b"cat: /run/plasma/mt5-environment.json: No such file or directory\n",
+        )
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            patch.object(
+                mt5_input,
+                "execute",
+                side_effect=[
+                    SimpleNamespace(),
+                    missing,
+                    SimpleNamespace(stdout=b'{"DISPLAY":":123"}'),
+                ],
+            ) as execute,
+            patch.object(mt5_input.time, "monotonic", side_effect=[0, 1]),
+            patch.object(mt5_input.time, "sleep") as sleep,
+            patch.object(mt5_input.subprocess, "Popen", return_value=Mock()) as start,
+        ):
+            probe = mt5_input.Probe("docker", "private", Path(directory))
+            probe.close()
+        self.assertEqual(execute.call_count, 3)
+        self.assertEqual(execute.call_args_list[1], execute.call_args_list[2])
+        sleep.assert_called_once_with(0.1)
+        start.assert_called_once()
+
+    def test_probe_metadata_timeout_keeps_cause_and_never_starts_wine(self):
+        missing = subprocess.CalledProcessError(
+            1,
+            "cat",
+            stderr=b"cat: /run/plasma/mt5-environment.json: No such file or directory\n",
+        )
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            patch.object(mt5_input, "execute", side_effect=[SimpleNamespace(), missing]),
+            patch.object(mt5_input.time, "monotonic", side_effect=[0, 151]),
+            patch.object(mt5_input.time, "sleep") as sleep,
+            patch.object(mt5_input.subprocess, "Popen") as start,
+            self.assertRaisesRegex(RuntimeError, "metadata did not become ready") as error,
+        ):
+            mt5_input.Probe("docker", "private", Path(directory))
+        self.assertIs(error.exception.__cause__, missing)
+        sleep.assert_not_called()
+        start.assert_not_called()
+
+    def test_probe_metadata_other_failures_are_immediate(self):
+        for failure in (
+            subprocess.CalledProcessError(1, "cat", stderr=b"Permission denied\n"),
+            subprocess.CalledProcessError(125, "docker", stderr=b"Daemon unavailable\n"),
+            SimpleNamespace(stdout=b"invalid json"),
+        ):
+            with (
+                self.subTest(failure=failure),
+                tempfile.TemporaryDirectory() as directory,
+                patch.object(
+                    mt5_input, "execute", side_effect=[SimpleNamespace(), failure]
+                ),
+                patch.object(mt5_input.time, "sleep") as sleep,
+                patch.object(mt5_input.subprocess, "Popen") as start,
+                self.assertRaises(
+                    subprocess.CalledProcessError
+                    if isinstance(failure, Exception)
+                    else ValueError
+                ),
+            ):
+                mt5_input.Probe("docker", "private", Path(directory))
+            sleep.assert_not_called()
+            start.assert_not_called()
+
     def test_broken_worker_pipe_does_not_skip_reaping_or_log_closure(self):
         probe = object.__new__(mt5_input.Probe)
         probe.process, probe.log, probe.states = Mock(), Mock(), Mock()
@@ -913,6 +1001,103 @@ class InputState:
 
 
 class InputEffectTests(unittest.TestCase):
+    def test_first_dialog_physical_height_requires_scaled_100_percent_reference(self):
+        for dpi, height, reference, passed in (
+            (96, 20, None, True),
+            (120, 24, 20, True),
+            (120, 25, 20, True),
+            (192, 38, 20, True),
+            (192, 20, 20, False),
+            (192, 20, None, True),
+        ):
+            with (
+                self.subTest(dpi=dpi, height=height, reference=reference),
+                tempfile.TemporaryDirectory() as directory,
+            ):
+                output = Path(directory)
+                probe, client = Mock(), Mock()
+                probe.state.return_value = {
+                    "main": 123,
+                    "main_dpi": dpi,
+                    "controls": [
+                        {"edit": True, "root": 123, "rect": [20, 1, 200, 11]},
+                        {"edit": True, "root": 456, "rect": [20, 30, 200, 30 + height]},
+                    ],
+                }
+                client.screenshot.return_value = Image.new("RGB", (1600, 900), "white")
+                if passed:
+                    result = mt5_input.startup_dpi(
+                        probe, client, output, dpi, dialog=True, reference_height=reference
+                    )
+                    self.assertTrue(result["passed"])
+                else:
+                    with self.assertRaisesRegex(RuntimeError, "first-dialog scale"):
+                        mt5_input.startup_dpi(
+                            probe, client, output, dpi, dialog=True, reference_height=reference
+                        )
+                evidence = json.loads((output / "startup-dpi.json").read_text())
+                self.assertEqual(evidence["edit_height"], height)
+                self.assertEqual(
+                    evidence["expected_edit_height"],
+                    reference * dpi / 96 if reference else None,
+                )
+                self.assertEqual(evidence["passed"], passed)
+                self.assertTrue((output / evidence["capture"]).is_file())
+                self.assertEqual(client.mock_calls, [call.screenshot()])
+
+    def test_first_dialog_height_waits_read_only_and_rejects_invalid_control(self):
+        with tempfile.TemporaryDirectory() as directory:
+            probe, client = Mock(), Mock()
+            initial = {"main": 123, "main_dpi": 96, "controls": []}
+            invalid = initial | {
+                "controls": [{"edit": True, "root": 456, "rect": [20, 30, 200, 30]}]
+            }
+            probe.state.side_effect = [initial, invalid]
+            with (
+                patch.object(mt5_input.time, "sleep") as sleep,
+                self.assertRaisesRegex(RuntimeError, "height must be positive"),
+            ):
+                mt5_input.startup_dpi(probe, client, Path(directory), 96, dialog=True)
+            sleep.assert_called_once_with(0.2)
+            self.assertEqual(probe.state.call_count, 2)
+            client.assert_not_called()
+            client.screenshot.assert_not_called()
+
+    def test_first_window_dpi_is_checked_and_raw_frame_saved_before_input(self):
+        for expected, observed in ((96, 96), (120, 120), (192, 192), (192, 96)):
+            with (
+                self.subTest(expected=expected, observed=observed),
+                tempfile.TemporaryDirectory() as directory,
+            ):
+                output = Path(directory)
+                probe, client = Mock(), Mock()
+                probe.state.return_value = {
+                    "main": 123,
+                    "main_dpi": observed,
+                    "controls": [
+                        {"edit": True, "rect": [20, 30, 200, 68]},
+                        {"cancel": True, "rect": [200, 100, 250, 138]},
+                    ],
+                }
+                image = Image.new("RGB", (1600, 900), "white")
+                client.screenshot.return_value = image
+                if expected != observed:
+                    with self.assertRaisesRegex(RuntimeError, "first-window DPI"):
+                        mt5_input.startup_dpi(probe, client, output, expected)
+                else:
+                    self.assertTrue(
+                        mt5_input.startup_dpi(probe, client, output, expected)["passed"]
+                    )
+                evidence = json.loads((output / "startup-dpi.json").read_text())
+                self.assertEqual(evidence["expected"], expected)
+                self.assertEqual(evidence["observed"], observed)
+                self.assertEqual(evidence["controls"], [[20, 30, 200, 68]])
+                self.assertEqual(evidence["passed"], expected == observed)
+                with Image.open(output / evidence["capture"]) as captured:
+                    self.assertEqual(captured.size, image.size)
+                    self.assertEqual(captured.tobytes(), image.tobytes())
+                self.assertEqual(client.mock_calls, [call.screenshot()])
+
     def test_hidden_popup_still_owns_menu_capture_until_second_escape(self):
         state = InputState()
         state.click(17, 10)

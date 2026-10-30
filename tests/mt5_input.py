@@ -386,11 +386,28 @@ class Probe:
             str(source),
             container + ":/home/plasma/.wine/drive_c/MT5/mt5_ui_probe.py",
         )
-        environment = json.loads(
-            execute(
-                runtime, "exec", container, "cat", "/run/plasma/mt5-environment.json"
-            ).stdout
-        )
+        metadata = "/run/plasma/mt5-environment.json"
+        deadline = time.monotonic() + 150
+        while True:
+            try:
+                environment = json.loads(
+                    execute(
+                        runtime, "exec", container, "env", "LC_ALL=C", "cat", metadata
+                    ).stdout
+                )
+                break
+            except subprocess.CalledProcessError as error:
+                if (
+                    error.returncode != 1
+                    or error.stderr
+                    != f"cat: {metadata}: No such file or directory\n".encode()
+                ):
+                    raise
+                if time.monotonic() >= deadline:
+                    raise RuntimeError(
+                        "MT5 display metadata did not become ready"
+                    ) from error
+                time.sleep(0.1)
         self.log = (output / "probe.log").open("w")
         self.states = (output / "gui-state.jsonl").open("w")
         self.process = subprocess.Popen(
@@ -689,6 +706,57 @@ def wait_state(probe, predicate, expected="", timeout=20):
         time.sleep(0.2)
 
 
+def startup_dpi(probe, client, output, expected, *, dialog=False, reference_height=None):
+    """Observe the original MT5 window before input or an outer-window resize."""
+    state = wait_state(
+        probe,
+        lambda value: bool(value["main"])
+        and (
+            not dialog
+            or any(
+                item.get("edit") and item["root"] != value["main"]
+                for item in value["controls"]
+            )
+        ),
+        timeout=120,
+    )
+    height = None
+    if dialog:
+        edit = max(
+            (
+                item
+                for item in state["controls"]
+                if item.get("edit") and item["root"] != state["main"]
+            ),
+            key=lambda item: item["rect"][1],
+        )
+        height = edit["rect"][3] - edit["rect"][1]
+        if height <= 0:
+            raise RuntimeError("MT5 first-dialog edit height must be positive")
+    expected_height = reference_height * expected / 96 if reference_height else None
+    physical_passed = expected_height is None or abs(height - expected_height) <= 2
+    evidence = {
+        "expected": expected,
+        "observed": state["main_dpi"],
+        "controls": [item["rect"] for item in state["controls"] if item.get("edit")],
+        "edit_height": height,
+        "expected_edit_height": expected_height,
+        "capture": "startup-dpi.png",
+        "passed": state["main_dpi"] == expected and physical_passed,
+    }
+    client.screenshot().save(output / evidence["capture"])
+    (output / "startup-dpi.json").write_text(json.dumps(evidence, indent=2) + "\n")
+    if state["main_dpi"] != expected:
+        raise RuntimeError(
+            f"MT5 first-window DPI: expected {expected}, observed {state['main_dpi']}"
+        )
+    if not physical_passed:
+        raise RuntimeError(
+            f"MT5 first-dialog scale: expected edit height {expected_height} ±2, observed {height}"
+        )
+    return evidence
+
+
 def close_menu(client, probe):
     # Escape closes the popup first, then MT5's remaining menu-bar capture.
     for _ in range(2):
@@ -897,6 +965,7 @@ def main(args):
     parent = f"mt5-input-parent-{os.getpid()}"
     network = f"mt5-input-private-{os.getpid()}"
     reports = []
+    reference_height = None
     parent_client = None
     execute(args.runtime, "network", "create", "--internal", network)
     try:
@@ -1040,6 +1109,17 @@ def main(args):
                     else connect(args.runtime, name, mode, output)
                 )
                 probe = Probe(args.runtime, name, output)
+                if driver and backend == "wayland" and host == "wayland":
+                    report["startup_dpi"] = startup_dpi(
+                        probe,
+                        parent_client,
+                        output,
+                        round(96 * scale),
+                        dialog=not autologin,
+                        reference_height=reference_height,
+                    )
+                    if scale == 1 and not autologin:
+                        reference_height = report["startup_dpi"]["edit_height"]
                 if driver and not autologin:
                     driver.require_decoration = (
                         backend == "wayland" and host == "wayland"

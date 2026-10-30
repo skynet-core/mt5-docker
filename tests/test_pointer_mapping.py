@@ -494,9 +494,22 @@ class NestedMappingTests(unittest.TestCase):
                     )
 
             parent = Mock()
+            parent.screenshot.return_value = Image.new("RGB", (1600, 900), "white")
             probes = [Mock() for _ in range(12)]
-            for probe in probes:
-                probe.state.return_value = {"desktop": [-300, 40, 1200, 800]}
+            for index, probe in enumerate(probes):
+                dpi = round(96 * (1, 1.25, 2)[index // 4])
+                probe.state.return_value = {
+                    "main": 123,
+                    "main_dpi": dpi,
+                    "controls": [
+                        {
+                            "edit": True,
+                            "root": 456,
+                            "rect": [20, 30, 200, 30 + {96: 20, 120: 24, 192: 38}[dpi]],
+                        }
+                    ],
+                    "desktop": [-300, 40, 1200, 800],
+                }
             driver.output_scale.side_effect = scale_output
 
             def natural_window():
@@ -627,6 +640,22 @@ class NestedMappingTests(unittest.TestCase):
             report = json.loads((Path(directory) / "scaled/results.json").read_text())
             self.assertTrue(report["passed"])
             self.assertEqual(len(report["cases"]), 12)
+            self.assertEqual(
+                [
+                    row["startup_dpi"]["observed"]
+                    for row in report["cases"]
+                    if "startup_dpi" in row
+                ],
+                [96, 120, 192],
+            )
+            self.assertEqual(
+                [
+                    (row["startup_dpi"]["edit_height"], row["startup_dpi"]["expected_edit_height"])
+                    for row in report["cases"]
+                    if "startup_dpi" in row
+                ],
+                [(20, None), (24, 25), (38, 40)],
+            )
             self.assertNotIn(
                 "synthetic-secret-must-not-be-published", json.dumps(report)
             )
