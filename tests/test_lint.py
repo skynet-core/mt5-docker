@@ -41,12 +41,18 @@ class SourceLintTests(unittest.TestCase):
             root = Path(directory)
             subprocess.run(["git", "init", "-q", str(root)], check=True)
             (root / ".gitignore").write_text("artifacts/\n.env\n")
-            for name in ("tracked.py", "new file.py", "artifacts/generated.py"):
+            for name in (
+                "tracked.py",
+                "new file.py",
+                "tests/test_runtime.py",
+                "vendor/kde-container/test/helper.py",
+                "artifacts/generated.py",
+            ):
                 path = root / name
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text("pass\n")
             vendor = root / "vendor/helper"
-            vendor.parent.mkdir()
+            vendor.parent.mkdir(exist_ok=True)
             vendor.write_text("#!/usr/bin/python3\n")
             (root / ".env").write_text("# /// script\n")
             subprocess.run(["git", "add", "tracked.py"], cwd=root, check=True)
@@ -54,10 +60,35 @@ class SourceLintTests(unittest.TestCase):
                 LINT.sources(root),
                 {
                     "shell": [],
-                    "python": ["./new file.py", "./tracked.py", "./vendor/helper"],
+                    "python": [
+                        "./new file.py",
+                        "./tests/test_runtime.py",
+                        "./tracked.py",
+                        "./vendor/helper",
+                        "./vendor/kde-container/test/helper.py",
+                    ],
                     "c++": [],
                 },
             )
+
+    def test_coverage_excludes_test_sources_without_excluding_build_tools(self):
+        for name in (
+            "tests/test_runtime.py",
+            "./tests/display-matrix.sh",
+            "vendor/kde-container/test/helper.cpp",
+            "vendor/kde-container/native/ui-fixture.cpp",
+            "vendor/kde-container/native/vnc-benchmark.cpp",
+        ):
+            with self.subTest(name=name):
+                self.assertFalse(LINT.coverage_source(name))
+        for name in (
+            "build/coverage_report.py",
+            "build/test-runner.py",
+            "vendor/kde-container/native/clipboard.cpp",
+            "vendor/kde-container/compat/wayland-pointer-enter.cpp",
+        ):
+            with self.subTest(name=name):
+                self.assertTrue(LINT.coverage_source(name))
 
     def test_lint_failure_still_checks_other_languages_and_fails_the_command(self):
         with (

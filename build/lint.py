@@ -7,6 +7,15 @@ import subprocess
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+COVERAGE_EXCLUDE = (
+    r"(?:tests/|vendor/kde-container/test/|"
+    r"vendor/kde-container/native/(?:ui-fixture|vnc-benchmark)\.cpp$)"
+)
+
+
+def coverage_source(name):
+    """Measure shipped/build code while continuing to lint all test sources."""
+    return re.match(COVERAGE_EXCLUDE, str(name).removeprefix("./")) is None
 
 
 def language(path):

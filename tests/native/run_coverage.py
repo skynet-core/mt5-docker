@@ -1,5 +1,6 @@
 """Run native tests and preserve their coverage even when a test fails."""
 
+import importlib.util
 import subprocess
 import sys
 from pathlib import Path
@@ -7,10 +8,18 @@ from pathlib import Path
 ROOT = Path("/source")
 BUILD = Path("/native-build")
 OUTPUT = Path("/coverage")
+POLICY_SPEC = importlib.util.spec_from_file_location(
+    "coverage_policy", Path(__file__).resolve().parents[2] / "build/lint.py"
+)
+POLICY = importlib.util.module_from_spec(POLICY_SPEC)
+POLICY_SPEC.loader.exec_module(POLICY)
 
 
 def main():
     OUTPUT.mkdir(parents=True, exist_ok=True)
+    # Reusing an output directory must not retain obsolete test-source pages.
+    for previous in OUTPUT.glob("native*.html"):
+        previous.unlink()
     commands = [
         (
             "ctest",
@@ -33,6 +42,8 @@ def main():
                 str(ROOT),
                 "--filter",
                 r"(vendor/kde-container|tests/native)/.*",
+                "--exclude",
+                POLICY.COVERAGE_EXCLUDE,
                 "--merge-mode-functions",
                 "merge-use-line-min",
                 "--json",

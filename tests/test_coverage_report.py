@@ -5,16 +5,19 @@ import hashlib
 import importlib.util
 import io
 import json
+import re
 import runpy
 import subprocess
 import sys
 import tempfile
 import unittest
+from html import unescape
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
+from xml.etree import ElementTree
 
-from coverage import CoverageData
+from coverage import Coverage, CoverageData
 
 ROOT = Path(__file__).resolve().parents[1]
 SPEC = importlib.util.spec_from_file_location(
@@ -35,8 +38,14 @@ class SourceIdentityTests(unittest.TestCase):
                 "host-env": "# /// script\nprint(1)\n",
                 "script": "#!/bin/bash\ntrue\n",
                 "native.cpp": "int main() {return 0;}\n",
+                "tests/test_source.py": "assert True\n",
+                "tests/helper.sh": "#!/bin/bash\ntrue\n",
+                "vendor/kde-container/test/helper.cpp": "int test() {return 0;}\n",
+                "vendor/kde-container/native/ui-fixture.cpp": "int main() {return 0;}\n",
+                "vendor/kde-container/native/vnc-benchmark.cpp": "int main() {return 0;}\n",
             }
             for name, body in sources.items():
+                (root / name).parent.mkdir(parents=True, exist_ok=True)
                 (root / name).write_text(body)
             (root / "README.md").write_text("documentation\n")
             (root / ".gitignore").write_text("ignored.py\n")
@@ -57,6 +66,10 @@ class SourceIdentityTests(unittest.TestCase):
             manifest = root / "manifest.json"
             manifest.write_text(json.dumps(before))
             REPORT.verify_sources([manifest], root)
+            (root / "tests/test_source.py").write_text("assert 1 == 1\n")
+            with self.assertRaisesRegex(ValueError, "changed after coverage"):
+                REPORT.verify_sources([manifest], root)
+            (root / "tests/test_source.py").write_text(sources["tests/test_source.py"])
             (root / "source.py").write_text("print(2)\n")
             with self.assertRaisesRegex(ValueError, "changed after coverage"):
                 REPORT.verify_sources([manifest], root)
@@ -75,6 +88,62 @@ class SourceIdentityTests(unittest.TestCase):
 
 
 class PythonEvidenceTests(unittest.TestCase):
+    def test_python_tests_run_but_all_report_formats_only_include_application_code(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for name, code in {
+                "build/application.py": "answer = 42\n",
+                "vendor/kde-container/test/helper.py": "checked = True\n",
+                "tests/test_application.py": (
+                    "import runpy\nfrom pathlib import Path\n"
+                    "assert runpy.run_path('build/application.py')['answer'] == 42\n"
+                    "assert runpy.run_path('vendor/kde-container/test/helper.py')['checked']\n"
+                    "Path('tests-ran').write_text('yes')\n"
+                ),
+            }.items():
+                source = root / name
+                source.parent.mkdir(parents=True, exist_ok=True)
+                source.write_text(code)
+            with contextlib.chdir(root):
+                coverage = Coverage(
+                    config_file=str(ROOT / ".coveragerc"), data_file=str(root / "data")
+                )
+                coverage.start()
+                try:
+                    runpy.run_path("tests/test_application.py")
+                finally:
+                    coverage.stop()
+                self.assertNotIn(
+                    "tests/test_application.py", coverage.get_data().measured_files()
+                )
+                # Old raw profiles must not reintroduce test files in any format.
+                coverage.get_data().add_arcs(
+                    {"tests/test_application.py": [(-1, 1), (1, -1)]}
+                )
+                coverage.save()
+                coverage.json_report(outfile=str(root / "report.json"))
+                coverage.xml_report(outfile=str(root / "report.xml"))
+                coverage.html_report(directory=str(root / "html"))
+            self.assertEqual((root / "tests-ran").read_text(), "yes")
+            self.assertEqual(
+                set(json.loads((root / "report.json").read_text())["files"]),
+                {"build/application.py"},
+            )
+            self.assertEqual(
+                {
+                    row.attrib["filename"]
+                    for row in ElementTree.parse(root / "report.xml").iter("class")
+                },
+                {"build/application.py"},
+            )
+            html = (root / "html/index.html").read_text()
+            text = unescape(re.sub(r"<[^>]+>", "", html))
+            self.assertIn("build/application.py", text)
+            self.assertNotIn("tests/test_application.py", text)
+            self.assertNotIn("vendor/kde-container/test/helper.py", text)
+
     def test_real_coverage_data_files_merge_and_unexecuted_lines_stay_missing(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

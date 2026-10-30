@@ -4,6 +4,7 @@ SHELL ["/bin/bash", "-e", "-u", "-o", "pipefail", "-c"]
 WORKDIR /source
 COPY vendor/kde-container/ /source/vendor/kde-container/
 COPY tests/native/ /source/tests/native/
+COPY build/lint.py /source/build/lint.py
 COPY pyproject.toml uv.lock /source/
 RUN --mount=type=bind,from=uv,source=/uv,target=/usr/local/bin/uv \
     uv sync --locked --only-group native --python 3.12 \

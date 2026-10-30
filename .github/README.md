@@ -45,14 +45,17 @@ then builds the production image and runs:
    dependency. Publishing therefore requires 58 profiles per distribution.
 
 Before image jobs, the source job requires at least **94% executable-line coverage
-for every maintained Python, Bash and C++ source**, including tests and maintained
-vendored code. Python/C++ branch reports are separate. Bash traces contain only
+for every application, runtime and build Python, Bash and C++ source**, including
+maintained vendored runtime code. Tests, helpers and native test fixtures/benchmarks
+still run and are linted, but are excluded from coverage tables and detailed pages.
+Python/C++ branch reports are separate. Bash traces contain only
 paths and line numbers, never command text or credentials. A dedicated Fedora
 test image builds and runs native coverage without adding test dependencies to
-published images. The compiler-audited declaration-only header is shown as N/A
-and pinned by source hash; other missing or empty measurements fail. The combined
+published images. Any included declaration-only header requires a compiler audit
+and pinned source hash; other missing or empty measurements fail. The combined
 per-file table and raw/JSON/XML/HTML profiles are uploaded as `source-coverage`,
-including after a failed check. Source hashes prevent merging stale profiles.
+including after a failed check. Source-input hashes still include tests to prevent
+merging stale profiles; test paths do not appear in published coverage results.
 
 ## Coverage site and README report
 

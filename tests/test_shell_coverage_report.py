@@ -44,6 +44,17 @@ class ShellCoverageReportTests(unittest.TestCase):
         self.assertEqual(rows["entry.sh"]["covered_lines"], [2])
         self.assertEqual(rows["uncovered"]["covered_lines"], [])
 
+    def test_shell_test_traces_do_not_create_test_coverage_rows(self):
+        for name in ("tests/check.sh", "vendor/kde-container/test/check.sh"):
+            source = self.root / name
+            source.parent.mkdir(parents=True, exist_ok=True)
+            source.write_text("#!/bin/bash\ntrue\n")
+        self.trace(self.root / "tests/check.sh", 2)
+        self.assertEqual(
+            {row["file"] for row in report(self.root, self.traces)["files"]},
+            {"entry.sh", "uncovered"},
+        )
+
     def test_ast_excludes_comments_heredoc_content_and_pure_compound_keywords(self):
         code = (
             "# comment\nexport word=test\nlocal value=1\n"

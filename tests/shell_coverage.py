@@ -93,6 +93,7 @@ def report(root, trace_dir, map_path=None):
     syntax = {
         (root / name).resolve(): command_locations((root / name).read_text())
         for name in inventory.sources(root)["shell"]
+        if inventory.coverage_source(name)
     }
     files = {source: locations[0] for source, locations in syntax.items()}
     aliases = {}

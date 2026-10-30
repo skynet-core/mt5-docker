@@ -10,12 +10,17 @@ include =
     build/*
     init.d/*
     libexec/*
-    tests/*
     vendor/kde-container/*
+omit =
+    tests/*
+    vendor/kde-container/test/*
 
 [report]
 show_missing = True
 exclude_lines =
+omit =
+    tests/*
+    vendor/kde-container/test/*
 
 [html]
 directory = artifacts/coverage/python/html

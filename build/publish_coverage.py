@@ -2,6 +2,7 @@
 
 import argparse
 import html
+import importlib.util
 import json
 import math
 import re
@@ -14,6 +15,12 @@ START = "<!-- coverage-report:start -->"
 END = "<!-- coverage-report:end -->"
 LANGUAGES = {"python": "Python", "shell": "Bash", "c++": "C++"}
 ASSETS = {".html", ".css", ".js", ".png", ".svg", ".ico", ".woff", ".woff2"}
+ROOT = Path(__file__).resolve().parents[1]
+POLICY_SPEC = importlib.util.spec_from_file_location(
+    "coverage_policy", ROOT / "build/lint.py"
+)
+POLICY = importlib.util.module_from_spec(POLICY_SPEC)
+POLICY_SPEC.loader.exec_module(POLICY)
 
 
 def require(condition, message):
@@ -62,6 +69,10 @@ def validate_report(data):
     for original in data["files"]:
         require(isinstance(original, dict), "File result must be a JSON object")
         name = source_path(original.get("file"))
+        require(
+            POLICY.coverage_source(name),
+            "Test sources cannot appear in public coverage",
+        )
         require(name not in names, "Duplicate source file")
         names.add(name)
         kind = original.get("language")
@@ -223,6 +234,37 @@ def replace_readme(content, block):
 def asset_files(root):
     if root is None:
         return []
+    for name in ("python/coverage.json", "native/native.json"):
+        report = root / name
+        require(
+            report.is_file()
+            and not report.is_symlink()
+            and report.resolve().is_relative_to(root.resolve()),
+            f"Missing or unsafe detailed coverage metadata: {name}",
+        )
+        data = json.loads(report.read_text())
+        require(isinstance(data, dict), "Invalid detailed coverage metadata")
+        files = data.get("files")
+        if name.startswith("python/"):
+            require(isinstance(files, dict), "Invalid Python coverage sources")
+            names = files
+        else:
+            require(
+                isinstance(files, list) and all(isinstance(row, dict) for row in files),
+                "Invalid native coverage sources",
+            )
+            names = [row.get("file") for row in files]
+        for value in names:
+            require(isinstance(value, str), "Invalid detailed coverage source")
+            source = source_path(
+                value.removeprefix("/source/")
+                .removeprefix(str(ROOT) + "/")
+                .removeprefix("./")
+            )
+            require(
+                POLICY.coverage_source(source),
+                "Test sources cannot appear in detailed coverage",
+            )
     result = []
     for folder, index in (("python/html", "index.html"), ("native", "native.html")):
         source = root / folder

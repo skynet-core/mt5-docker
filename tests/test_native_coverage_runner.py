@@ -3,6 +3,7 @@
 import contextlib
 import importlib.util
 import io
+import re
 import runpy
 import subprocess
 import sys
@@ -24,6 +25,9 @@ class NativeCoverageRunnerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             source, build, output = root / "source", root / "build", root / "output"
+            output.mkdir()
+            previous = output / "native.tests_old.cpp.html"
+            previous.write_text("old test-source coverage")
             calls = []
 
             def run(command, **options):
@@ -51,6 +55,7 @@ class NativeCoverageRunnerTests(unittest.TestCase):
                 contextlib.redirect_stdout(io.StringIO()) as printed,
             ):
                 status = RUNNER.main()
+            self.assertFalse(previous.exists())
             logs = {path.name: path.read_text() for path in output.glob("*.log")}
             for _command, options in calls:
                 self.assertEqual(options["cwd"], source)
@@ -74,6 +79,17 @@ class NativeCoverageRunnerTests(unittest.TestCase):
             self.assertEqual(gcovr[:3], [sys.executable, "-m", "gcovr"])
             self.assertEqual(gcovr[gcovr.index("--root") + 1], str(source))
             self.assertEqual(gcovr[-1], str(build))
+            exclusion = gcovr[gcovr.index("--exclude") + 1]
+            for name in (
+                "tests/native/input-unit.cpp",
+                "vendor/kde-container/test/egl-fence-test.cpp",
+                "vendor/kde-container/native/ui-fixture.cpp",
+                "vendor/kde-container/native/vnc-benchmark.cpp",
+            ):
+                self.assertIsNotNone(re.match(exclusion, name))
+            self.assertIsNone(
+                re.match(exclusion, "vendor/kde-container/native/kwin-input.cpp")
+            )
             for flag, name in (
                 ("--json", "native.json"),
                 ("--xml", "native.xml"),
@@ -132,6 +148,7 @@ class NativeCoverageRunnerTests(unittest.TestCase):
         with (
             patch.object(Path, "mkdir"),
             patch.object(Path, "open", mock_open()),
+            patch.object(Path, "glob", return_value=[]),
             patch.object(Path, "is_file", return_value=True),
             patch.object(Path, "stat", return_value=SimpleNamespace(st_size=1)),
             patch.object(

@@ -1,4 +1,4 @@
-"""Enforce 94% executable-line coverage separately for every maintained source."""
+"""Enforce 94% executable-line coverage separately for application/build sources."""
 
 import argparse
 import hashlib
@@ -10,13 +10,8 @@ from coverage import Coverage, CoverageData
 
 ROOT = Path(__file__).resolve().parents[1]
 MINIMUM = 94
-# GCC emits no executable rows for these declarations; a source edit requires re-audit.
-DECLARATION_ONLY = {
-    "tests/native/fake-wayland.h": {
-        "sha256": "28f86f8b06542402abee1be503553c3e989ad4aea77184b338e36d20f2c86efd",
-        "reason": "Declarations only; GCC emits no executable lines; input-unit tests the member defaults",
-    }
-}
+# Any future declaration-only production header requires a source-hash audit.
+DECLARATION_ONLY: dict[str, dict[str, str]] = {}
 
 
 def load_module(path, name):
@@ -26,19 +21,23 @@ def load_module(path, name):
     return result
 
 
-def inventory(root=ROOT):
-    groups = load_module(ROOT / "build/lint.py", "source_inventory").sources(root)
+SOURCE_POLICY = load_module(ROOT / "build/lint.py", "source_inventory")
+
+
+def inventory(root=ROOT, *, include_tests=False):
+    groups = SOURCE_POLICY.sources(root)
     return {
         name.removeprefix("./"): kind
         for kind, names in groups.items()
         for name in names
+        if include_tests or SOURCE_POLICY.coverage_source(name)
     }
 
 
 def manifest(root=ROOT):
     return {
         name: hashlib.sha256((root / name).read_bytes()).hexdigest()
-        for name in inventory(root)
+        for name in inventory(root, include_tests=True)
     }
 
 
@@ -173,7 +172,7 @@ def write_report(data, output):
     lines = [
         "# Per-file source coverage",
         "",
-        f"Required: **{MINIMUM}% for every maintained file**. Unmeasured files fail.",
+        f"Required: **{MINIMUM}% for every application/build file**. Unmeasured files fail.",
         "",
         "| Source | Language | Covered / executable | Coverage | Result | Missing lines |",
         "| --- | --- | --- | --- | --- | --- |",

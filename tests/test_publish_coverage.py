@@ -90,7 +90,33 @@ def files(root):
     return args, readme
 
 
+def detailed_reports(root):
+    for name, data in (
+        ("python/coverage.json", {"files": {"build/lint.py": {}}}),
+        (
+            "native/native.json",
+            {"files": [{"file": "vendor/kde-container/native/clipboard.cpp"}]},
+        ),
+    ):
+        path = root / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(data))
+
+
 class ReportValidationTests(unittest.TestCase):
+    def test_test_sources_cannot_be_published_from_older_reports(self):
+        for name in (
+            "tests/test_runtime.py",
+            "vendor/kde-container/test/egl-fence-test.cpp",
+            "vendor/kde-container/native/ui-fixture.cpp",
+            "vendor/kde-container/native/vnc-benchmark.cpp",
+        ):
+            with self.subTest(name=name):
+                data = report()
+                data["files"][0]["file"] = name
+                with self.assertRaisesRegex(ValueError, "Test sources"):
+                    PUBLISH.validate_report(data)
+
     def test_valid_metadata_is_reconstructed_without_private_extra_fields(self):
         data = PUBLISH.validate_report(report())
         self.assertNotIn("never-publish", json.dumps(data))
@@ -300,7 +326,6 @@ class PublishingTests(unittest.TestCase):
                 "native/native.functions.html": "native source",
                 "native/native.source.html": '<a class="nav index" href="missing.html">up</a><p>covered</p>',
                 "native/native.png": "native icon",
-                "native/native.json": "private-payload",
                 "native/ctest.log": "private-payload",
                 "native/foreign.html": "private-payload",
                 "shell/maps.jsonl": "private-payload",
@@ -310,6 +335,7 @@ class PublishingTests(unittest.TestCase):
                 path = artifact / name
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text(value)
+            detailed_reports(artifact)
             with contextlib.redirect_stdout(io.StringIO()):
                 self.assertEqual(
                     PUBLISH.main(args + ["--artifact-root", str(artifact)]), 0
@@ -388,9 +414,10 @@ class PublishingTests(unittest.TestCase):
                 args, readme = files(root)
                 before = readme.read_bytes()
                 artifact = root / "artifact"
+                detailed_reports(artifact)
                 (artifact / "python/html").mkdir(parents=True)
                 (artifact / "python/html/index.html").write_text("python")
-                (artifact / "native").mkdir()
+                (artifact / "native").mkdir(exist_ok=True)
                 if failure != "missing":
                     (artifact / "native/native.html").write_text("native")
                     if failure == "symlink-file":
@@ -401,6 +428,95 @@ class PublishingTests(unittest.TestCase):
                         (artifact / "python/html/external").symlink_to(
                             root, target_is_directory=True
                         )
+                with self.assertRaises(ValueError):
+                    PUBLISH.main(args + ["--artifact-root", str(artifact)])
+                self.assertEqual(readme.read_bytes(), before)
+                self.assertFalse((root / "site").exists())
+
+    def test_detailed_metadata_rejects_test_sources_even_with_a_clean_main_table(self):
+        for name, data in (
+            ("python/coverage.json", {"files": {"tests/test_runtime.py": {}}}),
+            (
+                "native/native.json",
+                {"files": [{"file": "/source/tests/native/input-unit.cpp"}]},
+            ),
+            (
+                "native/native.json",
+                {
+                    "files": [
+                        {
+                            "file": str(
+                                PUBLISH.ROOT
+                                / "vendor/kde-container/native/ui-fixture.cpp"
+                            )
+                        }
+                    ]
+                },
+            ),
+            (
+                "native/native.json",
+                {"files": [{"file": "./vendor/kde-container/test/egl-fence-test.cpp"}]},
+            ),
+            (
+                "native/native.json",
+                {"files": [{"file": "vendor/kde-container/native/vnc-benchmark.cpp"}]},
+            ),
+        ):
+            with (
+                self.subTest(name=name, data=data),
+                tempfile.TemporaryDirectory() as directory,
+            ):
+                root = Path(directory)
+                args, readme = files(root)
+                before = readme.read_bytes()
+                artifact = root / "artifact"
+                detailed_reports(artifact)
+                (artifact / name).write_text(json.dumps(data))
+                with self.assertRaisesRegex(ValueError, "Test sources"):
+                    PUBLISH.main(args + ["--artifact-root", str(artifact)])
+                self.assertEqual(readme.read_bytes(), before)
+                self.assertFalse((root / "site").exists())
+
+    def test_missing_invalid_or_symlinked_detailed_metadata_is_rejected_before_writes(
+        self,
+    ):
+        for failure in (
+            "missing",
+            "symlink",
+            "not-object",
+            "python-files",
+            "native-files",
+            "native-row",
+            "native-path",
+        ):
+            with (
+                self.subTest(failure=failure),
+                tempfile.TemporaryDirectory() as directory,
+            ):
+                root = Path(directory)
+                args, readme = files(root)
+                before = readme.read_bytes()
+                artifact = root / "artifact"
+                detailed_reports(artifact)
+                path = artifact / "python/coverage.json"
+                if failure == "missing":
+                    path.unlink()
+                elif failure == "symlink":
+                    path.unlink()
+                    path.symlink_to(root / "report.json")
+                elif failure == "not-object":
+                    path.write_text("[]")
+                elif failure == "python-files":
+                    path.write_text('{"files": []}')
+                else:
+                    values = {
+                        "native-files": {},
+                        "native-row": [None],
+                        "native-path": [{"file": None}],
+                    }
+                    (artifact / "native/native.json").write_text(
+                        json.dumps({"files": values[failure]})
+                    )
                 with self.assertRaises(ValueError):
                     PUBLISH.main(args + ["--artifact-root", str(artifact)])
                 self.assertEqual(readme.read_bytes(), before)
