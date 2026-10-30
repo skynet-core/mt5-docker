@@ -15,17 +15,17 @@ int OnInit()
    FileWrite(log_file,"event","name","x","y");
    for(int i=0;i<ArraySize(names);i++)
    {
-      if(!ObjectCreate(0,names[i],OBJ_BUTTON,0,0,0) ||
+      if(!ObjectCreate(0,names[i],OBJ_RECTANGLE_LABEL,0,0,0) ||
          !ObjectSetInteger(0,names[i],OBJPROP_CORNER,CORNER_LEFT_UPPER) ||
          !ObjectSetInteger(0,names[i],OBJPROP_XDISTANCE,positions[i]) ||
          !ObjectSetInteger(0,names[i],OBJPROP_YDISTANCE,40) ||
          !ObjectSetInteger(0,names[i],OBJPROP_XSIZE,120) ||
          !ObjectSetInteger(0,names[i],OBJPROP_YSIZE,44) ||
          !ObjectSetInteger(0,names[i],OBJPROP_BGCOLOR,colors[i]) ||
-         !ObjectSetInteger(0,names[i],OBJPROP_COLOR,clrWhite) ||
+         !ObjectSetInteger(0,names[i],OBJPROP_COLOR,colors[i]) ||
+         !ObjectSetInteger(0,names[i],OBJPROP_BORDER_TYPE,BORDER_FLAT) ||
          !ObjectSetInteger(0,names[i],OBJPROP_SELECTABLE,false) ||
-         !ObjectSetInteger(0,names[i],OBJPROP_ZORDER,100) ||
-         !ObjectSetString(0,names[i],OBJPROP_TEXT,names[i]))
+         !ObjectSetInteger(0,names[i],OBJPROP_ZORDER,100))
          return INIT_FAILED;
    }
    ChartRedraw();

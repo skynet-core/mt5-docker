@@ -9,7 +9,7 @@ Four amd64 images extend the corresponding [`skynet-core/systemd`](https://githu
 | `Dockerfile.ubuntu-26.04` | `ghcr.io/skynet-core/systemd:ubuntu-26.04` | KWin 6.8.2 |
 | `Dockerfile.archlinux` | `ghcr.io/skynet-core/systemd:archlinux` | Distribution KWin |
 
-The images install Wine, Microsoft's Evergreen WebView2 runtime, the official MT5 terminal/MetaEditor/Strategy Tester, and Windows Python for `mt5-mcp`. MT5 runs fullscreen under KWin as the unprivileged `plasma` user. Wine uses X11, through Xwayland in Wayland sessions. Systemd remains PID 1. Plasma desktop applications and the desktop shell are omitted.
+The images install Wine, Microsoft's Evergreen WebView2 runtime, the official MT5 terminal/MetaEditor/Strategy Tester, and Windows Python for `mt5-mcp`. MT5 fills the display under KWin as the unprivileged `plasma` user. Wine uses X11, through Xwayland in Wayland sessions. Systemd remains PID 1. Plasma desktop applications and the desktop shell are omitted.
 
 The display runtime is vendored from [`skynet-core/kde-container` at `782714f`](https://github.com/skynet-core/kde-container/tree/782714fb841737b884ea263ada5108ae3754be85). Its native clipboard bridge, patched KRFB capture/input, GPU probe, software fallback, and scoped NVIDIA synchronization fix are retained. See [the source record](vendor/kde-container/UPSTREAM) for local changes.
 
@@ -363,7 +363,7 @@ done
 
 Evidence is under `artifacts/mt5-input/<distribution>/<backend>/<mode>/`, with `on-wayland/` or `on-x11/` below nested cases. It includes startup, keyboard, menu and final screenshots, expected/observed text, read-only GUI state, the last input phase and service/compositor logs. Web cases also retain a browser trace. `results.json` fails when any expected case or input assertion fails. Add `--gpu` for a separate NVIDIA hardware run; Wayland uses NVIDIA while the X11/Xvfb profiles use llvmpipe. Standard CI hides physical DRI devices inside the test namespace to exercise software rendering. Both tiers hide host audio, input and USB devices before init.
 
-The startup regression repeats these profiles with `--startup autologin`. It uses a dummy login on an internal network, so the terminal skips the company-selection dialog without reaching a broker. That dialog previously refreshed Wine's window geometry and hid an offset in the first chart click. A test expert draws colored buttons; the test locates them in screenshots and checks their actual MT5 chart-local click coordinates and object names. Compilation runs in a separate disposable container before the tested session starts. No menu, dialog or MetaEditor window may repair the tested session before its first chart click.
+The startup regression repeats these profiles with `--startup autologin`. It uses a dummy login on an internal network, so the terminal skips the company-selection dialog without reaching a broker. That dialog previously refreshed Wine's window geometry and hid an offset in the first chart click. A test expert draws flat colored targets; the test locates them in screenshots and checks their actual MT5 chart-local click coordinates and object names. Compilation runs in a separate disposable container before the tested session starts. No menu, dialog or MetaEditor window may repair the tested session before its first chart click.
 
 ```sh
 uv run --locked python tests/mt5_input.py \
