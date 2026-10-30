@@ -204,7 +204,9 @@ class KWinDriver:
                 )
                 # An asynchronous tag may not have reached journald yet.
                 if not (
-                    journal.returncode == 1 and not journal.stdout and not journal.stderr
+                    journal.returncode == 1
+                    and not journal.stdout
+                    and not journal.stderr
                 ):
                     journal.check_returncode()
                 log = journal.stdout.decode()
@@ -251,15 +253,27 @@ class KWinDriver:
             finally:
                 path.unlink(missing_ok=True)
 
+    def wait_window(self):
+        windows = self.state()["windows"]
+        if not windows:
+            deadline = time.monotonic() + 30
+            while not windows:
+                require(
+                    time.monotonic() < deadline,
+                    "Private child window did not map before the deadline",
+                )
+                time.sleep(0.1)
+                windows = self.state()["windows"]
+        require(
+            len(windows) == 1,
+            "Private parent must contain exactly one normal child window",
+        )
+        return windows[0]
+
     def place_window(self, x, y, width, height):
         target = {"x": x, "y": y, "width": width, "height": height}
         require(rectangle(target), "Invalid requested private window rectangle")
-        initial = self.state()
-        require(
-            len(initial["windows"]) == 1,
-            "Private parent must contain exactly one normal child window",
-        )
-        identifier = initial["windows"][0]["id"]
+        identifier = self.wait_window()["id"]
         select = f"const windows=workspace.stackingOrder.filter(w=>w.normalWindow);if(windows.length!==1||windows[0].internalId.toString()!=={json.dumps(identifier)})throw Error('Private child changed');const w=windows[0];"
         self.state(
             select + "w.fullScreen=false;w.setMaximize(false,false);w.noBorder=false;"

@@ -8,7 +8,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import call, patch
 
 import kwin_driver
 
@@ -441,6 +441,43 @@ class PrivateDriverTests(unittest.TestCase):
                 driver.state()
             self.assertEqual(desktop.tags, desktop.unloaded)
 
+    def test_window_readiness_waits_for_mapping_without_mutating_geometry(self):
+        with tempfile.TemporaryDirectory() as directory:
+            driver, _ = self.create(directory)
+            window = {"id": "mapped-child", "frame": {"width": 1280, "height": 996}}
+            with (
+                patch.object(
+                    driver,
+                    "state",
+                    side_effect=[
+                        {"windows": []},
+                        {"windows": []},
+                        {"windows": [window]},
+                    ],
+                ) as state,
+                patch.object(kwin_driver.time, "monotonic", return_value=0),
+                patch.object(kwin_driver.time, "sleep") as sleep,
+            ):
+                self.assertIs(driver.wait_window(), window)
+            self.assertEqual(state.call_args_list, [call(), call(), call()])
+            self.assertEqual(sleep.call_args_list, [call(0.1), call(0.1)])
+
+    def test_window_readiness_times_out_or_rejects_multiple_children(self):
+        for windows, error in (([], "did not map"), ([{}, {}], "exactly one")):
+            with (
+                self.subTest(windows=windows),
+                tempfile.TemporaryDirectory() as directory,
+            ):
+                driver, _ = self.create(directory)
+                with (
+                    patch.object(driver, "state", return_value={"windows": windows}),
+                    patch.object(kwin_driver.time, "monotonic", side_effect=[0, 31]),
+                    patch.object(kwin_driver.time, "sleep") as sleep,
+                    self.assertRaisesRegex(RuntimeError, error),
+                ):
+                    driver.wait_window()
+                sleep.assert_not_called()
+
     def test_placement_assigns_fresh_rectangle_and_waits_for_configure_ack(self):
         with tempfile.TemporaryDirectory() as directory:
             driver, desktop = self.create(directory)
@@ -548,13 +585,11 @@ class PrivateDriverTests(unittest.TestCase):
             driver, _ = self.create(directory)
             with self.assertRaisesRegex(RuntimeError, "rectangle"):
                 driver.place_window(1, 2, 0, 5)
-            for windows in ([], [{}, {}]):
-                with (
-                    self.subTest(windows=windows),
-                    patch.object(driver, "state", return_value={"windows": windows}),
-                    self.assertRaisesRegex(RuntimeError, "exactly one"),
-                ):
-                    driver.place_window(1, 2, 3, 4)
+            with (
+                patch.object(driver, "state", return_value={"windows": [{}, {}]}),
+                self.assertRaisesRegex(RuntimeError, "exactly one"),
+            ):
+                driver.place_window(1, 2, 3, 4)
             valid = {
                 "id": "first",
                 "frame": {"x": 0, "y": 0, "width": 3, "height": 4},

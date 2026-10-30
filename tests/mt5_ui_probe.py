@@ -86,6 +86,26 @@ def edit_text(window, user=None):
     return buffer.value
 
 
+def file_menu_fallback(window, gui, user=None):
+    """Locate MT5's menu when Wine cannot inspect its foreign HMENU."""
+    user = user or ctypes.windll.user32
+    get_dpi = user.GetDpiForWindow
+    get_dpi.argtypes = (wintypes.HWND,)
+    get_dpi.restype = wintypes.UINT
+    metric = user.GetSystemMetricsForDpi
+    metric.argtypes = (ctypes.c_int, wintypes.UINT)
+    metric.restype = ctypes.c_int
+    dpi = get_dpi(window)
+    if dpi <= 0:
+        raise RuntimeError("Cannot read MT5 window DPI")
+    height = metric(15, dpi)  # SM_CYMENU; the client starts below the menu bar.
+    width = round(34 * dpi / 96)
+    if height <= 0 or width <= 0:
+        raise RuntimeError("MT5 menu dimensions must be positive")
+    left, bottom = gui.ClientToScreen(window, (0, 0))
+    return [left, bottom - height, left + width, bottom]
+
+
 def snapshot(expected="", gui=None, process=None, read_text=edit_text):
     physical = {"pointer": None, "desktop": None}
     read_focus = gui is None
@@ -133,9 +153,9 @@ def snapshot(expected="", gui=None, process=None, read_text=edit_text):
     )
     try:
         valid, rectangle = gui.GetMenuItemRect(main, gui.GetMenu(main), 0)
-        result["file_rect"] = rectangle if valid else [0, 0, 34, 20]
     except Exception:
-        result["file_rect"] = [0, 0, 34, 20]
+        valid, rectangle = False, None
+    result["file_rect"] = rectangle if valid else file_menu_fallback(main, gui)
     for window in windows:
         if process.GetWindowThreadProcessId(window)[1] != pid:
             continue

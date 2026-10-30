@@ -1051,11 +1051,7 @@ def main(args):
                         if backend == "x11" and host == "x11"
                         else None
                     )
-                    frame = (
-                        driver.state()["windows"][0]["frame"]
-                        if viewport_anchor
-                        else None
-                    )
+                    frame = driver.wait_window()["frame"] if viewport_anchor else None
                     size = (frame["width"], frame["height"]) if frame else (1280, 996)
                     window = driver.place_window(140, 70, *size)
                     report["window"] = window

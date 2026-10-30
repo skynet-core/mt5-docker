@@ -122,6 +122,60 @@ class ObservationTests(unittest.TestCase):
         user.IsWindow.return_value = False
         self.assertIsNone(mt5_ui_probe.edit_text(123, user))
 
+    def test_menu_fallback_uses_current_client_origin_and_per_window_dpi(self):
+        for origin, dpi, height, expected in (
+            ((0, 47), 96, 19, [0, 28, 34, 47]),
+            ((-1280, -40), 96, 19, [-1280, -59, -1246, -40]),
+            ((40, 94), 192, 38, [40, 56, 108, 94]),
+            ((-2560, -80), 192, 38, [-2560, -118, -2492, -80]),
+        ):
+            with self.subTest(origin=origin, dpi=dpi):
+                gui = Mock()
+                gui.ClientToScreen.return_value = origin
+                user = SimpleNamespace(
+                    GetDpiForWindow=Mock(return_value=dpi),
+                    GetSystemMetricsForDpi=Mock(return_value=height),
+                )
+                self.assertEqual(
+                    mt5_ui_probe.file_menu_fallback(123, gui, user), expected
+                )
+                user.GetDpiForWindow.assert_called_once_with(123)
+                user.GetSystemMetricsForDpi.assert_called_once_with(15, dpi)
+                gui.ClientToScreen.assert_called_once_with(123, (0, 0))
+                self.assertEqual(user.GetDpiForWindow.argtypes, (ctypes.wintypes.HWND,))
+                self.assertIs(user.GetDpiForWindow.restype, ctypes.wintypes.UINT)
+                self.assertEqual(
+                    user.GetSystemMetricsForDpi.argtypes,
+                    (ctypes.c_int, ctypes.wintypes.UINT),
+                )
+                self.assertIs(user.GetSystemMetricsForDpi.restype, ctypes.c_int)
+                with patch.object(
+                    ctypes, "windll", SimpleNamespace(user32=user), create=True
+                ):
+                    self.assertEqual(
+                        mt5_ui_probe.file_menu_fallback(123, gui), expected
+                    )
+
+    def test_menu_fallback_rejects_invalid_dpi_and_dimensions(self):
+        for dpi, height, error in (
+            (0, 19, "DPI"),
+            (-1, 19, "DPI"),
+            (96, 0, "dimensions"),
+            (96, -1, "dimensions"),
+            (1, 19, "dimensions"),
+        ):
+            with self.subTest(dpi=dpi, height=height):
+                gui = Mock()
+                user = SimpleNamespace(
+                    GetDpiForWindow=Mock(return_value=dpi),
+                    GetSystemMetricsForDpi=Mock(return_value=height),
+                )
+                with self.assertRaisesRegex(RuntimeError, error):
+                    mt5_ui_probe.file_menu_fallback(123, gui, user)
+                gui.ClientToScreen.assert_not_called()
+                if dpi <= 0:
+                    user.GetSystemMetricsForDpi.assert_not_called()
+
     def gui(self, *, main=True, menu="valid"):
         kinds = {
             100: "MetaQuotes::MetaTrader::5.00" if main else "Other",
@@ -173,7 +227,14 @@ class ObservationTests(unittest.TestCase):
         self,
     ):
         for menu in ("valid", "invalid", "error"):
-            with self.subTest(menu=menu):
+            with (
+                self.subTest(menu=menu),
+                patch.object(
+                    mt5_ui_probe,
+                    "file_menu_fallback",
+                    return_value=[120, 181, 154, 200],
+                ) as fallback,
+            ):
                 gui, process = self.gui(menu=menu)
                 read = Mock(
                     side_effect=lambda window: (
@@ -189,8 +250,12 @@ class ObservationTests(unittest.TestCase):
                 self.assertEqual(state["menus"], [300])
                 self.assertEqual(
                     state["file_rect"],
-                    (2, 2, 36, 22) if menu == "valid" else [0, 0, 34, 20],
+                    (2, 2, 36, 22) if menu == "valid" else [120, 181, 154, 200],
                 )
+                if menu == "valid":
+                    fallback.assert_not_called()
+                else:
+                    fallback.assert_called_once_with(100, gui)
                 self.assertEqual(
                     {call.args[0] for call in read.call_args_list}, {111, 202}
                 )

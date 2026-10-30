@@ -467,6 +467,7 @@ class ChartInputTests(unittest.TestCase):
                     )
                 )
                 driver.place_window.assert_not_called()
+                driver.wait_window.assert_not_called()
                 mapper.assert_not_called()
                 resized.assert_not_called()
                 if scaled:

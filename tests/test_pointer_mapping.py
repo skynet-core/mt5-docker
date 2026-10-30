@@ -528,6 +528,7 @@ class NestedMappingTests(unittest.TestCase):
                 }
 
             driver.state.side_effect = natural_window
+            driver.wait_window.side_effect = lambda: natural_window()["windows"][0]
             driver.place_window.side_effect = placed_window
 
             def exercise(client, probe, output):
@@ -615,7 +616,8 @@ class NestedMappingTests(unittest.TestCase):
                     )
                 ],
             )
-            self.assertEqual(driver.state.call_count, 6)
+            self.assertEqual(driver.wait_window.call_count, 6)
+            driver.state.assert_not_called()
             connect.assert_called_once()
             parent.close.assert_called_once_with()
             self.assertTrue(all(probe.close.call_count == 1 for probe in probes))
