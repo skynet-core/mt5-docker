@@ -492,6 +492,54 @@ exit 0
         self.assertNotIn("MT5_PASSWORD", metadata)
         self.assertNotIn(b"never-publish-this", files["mt5-environment.json"])
 
+    def test_mt5_launch_keeps_metadata_unpublished_until_json_is_complete(self):
+        for previous in (None, '{"DISPLAY":":previous"}'):
+            with self.subTest(previous=previous):
+
+                def setup(root, previous=previous):
+                    if previous is not None:
+                        (root / "mt5-environment.json").write_text(previous)
+                    helper = root / "dpi"
+                    helper.write_text("#!/bin/sh\nexit 0\n")
+                    helper.chmod(0o755)
+                    (root / "sitecustomize.py").write_text(
+                        """import json
+import os
+from pathlib import Path
+root = Path(os.environ['TEST_ROOT'])
+published = root / 'mt5-environment.json'
+previous = published.read_bytes() if published.exists() else None
+original_dump = json.dump
+def checked_dump(data, stream, *args, **kwargs):
+    if 'WINEPREFIX' in data:
+        stream.write('{')
+        stream.flush()
+        current = published.read_bytes() if published.exists() else None
+        assert current == previous, 'Readers observed incomplete display metadata'
+        stream.seek(0)
+        stream.truncate()
+        (root / 'publication-checked').write_text('checked')
+    return original_dump(data, stream, *args, **kwargs)
+json.dump = checked_dump
+"""
+                    )
+
+                result, _, _, files = self.run_source(
+                    ROOT / "bin/mt5-launch",
+                    setup=setup,
+                    before='export PYTHONPATH="$TEST_ROOT"\n',
+                    replacements=(
+                        ("/home/plasma/.wine", "prefix"),
+                        ("/run/plasma/mt5-environment.json", "mt5-environment.json"),
+                        ("/usr/local/libexec/mt5-dpi", "dpi"),
+                    ),
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(files["publication-checked"], b"checked")
+                self.assertEqual(
+                    json.loads(files["mt5-environment.json"])["DISPLAY"], ":100"
+                )
+
     def test_mt5_launch_stops_before_mt5_when_dpi_initialization_fails(self):
         def setup(root):
             helper = root / "dpi"
