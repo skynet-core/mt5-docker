@@ -430,17 +430,22 @@ async def validate(args):
                 )
                 await asyncio.sleep(2)
 
-        for source, folder in (
-            ("expert/AlgoSamurai.mq5", "Experts"),
-            ("tests/Screenshot.mq5", "Scripts"),
+        for source, relative in (
+            (None, "Experts/Advisors/ExpertMACD"),
+            ("tests/Screenshot.mq5", "Scripts/Screenshot"),
         ):
-            stem = Path(source).stem
+            stem = Path(relative).name
             checkpoint(f"compile-{stem}")
-            destination = f"{MT5}/MQL5/{folder}/{stem}"
-            docker("exec", args.container, "mkdir", "-p", f"{MT5}/MQL5/{folder}")
-            docker(
-                "cp", str(Path(source).resolve()), f"{args.container}:{destination}.mq5"
-            )
+            destination = f"{MT5}/MQL5/{relative}"
+            if source:
+                docker(
+                    "exec", args.container, "mkdir", "-p", str(Path(destination).parent)
+                )
+                docker(
+                    "cp",
+                    str(Path(source).resolve()),
+                    f"{args.container}:{destination}.mq5",
+                )
             docker(
                 "exec",
                 args.container,
@@ -451,10 +456,11 @@ async def validate(args):
             )
             docker("exec", args.container, "chown", "plasma:", f"{destination}.mq5")
             # MetaEditor exit codes vary under Wine; fresh binary and diagnostics are authoritative.
+            windows_path = relative.replace("/", "\\")
             wine(
                 r"C:\MT5\metaeditor64.exe",
                 "/portable",
-                f"/compile:C:\\MT5\\MQL5\\{folder}\\{stem}.mq5",
+                f"/compile:C:\\MT5\\MQL5\\{windows_path}.mq5",
                 "/log",
                 check=False,
             )
@@ -555,7 +561,7 @@ async def backtest(args, docker, copy, wine, output, evidence, checkpoint):
     name = f"validation-{int(time.time())}"
     config = output / "tester.ini"
     config.write_text(
-        "[Tester]\nExpert=AlgoSamurai.ex5\n"
+        "[Tester]\nExpert=Advisors\\ExpertMACD.ex5\n"
         f"Symbol={args.symbol}\nPeriod=M15\nModel=1\nOptimization=0\n"
         f"FromDate={args.start}\nToDate={args.end}\nReport={name}.htm\n"
         "ReplaceReport=1\nShutdownTerminal=1\nUseLocal=1\nUseRemote=0\nUseCloud=0\n"
@@ -617,7 +623,7 @@ with os.fdopen(os.open(path, os.O_WRONLY | os.O_TRUNC), 'w', encoding='utf-16') 
     html = read_text(output / "report.htm")
     summary = report_summary(html)
     require(
-        summary.get("Expert") == "AlgoSamurai",
+        summary.get("Expert") == "ExpertMACD",
         f"Wrong expert in report: {summary.get('Expert')}",
     )
     require(summary.get("Symbol", "").startswith(args.symbol), "Wrong symbol in report")

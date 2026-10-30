@@ -10,7 +10,7 @@ import sys
 import tempfile
 import unittest
 from datetime import UTC, datetime
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
@@ -153,9 +153,7 @@ class ValidationBoundary:
 
     def report(self):
         fields = {
-            "Expert": "WrongExpert"
-            if self.failure == "wrong-expert"
-            else "AlgoSamurai",
+            "Expert": "WrongExpert" if self.failure == "wrong-expert" else "ExpertMACD",
             "Symbol": "WRONG" if self.failure == "wrong-symbol" else "EURUSD (Euro)",
             "Total Trades": "3",
             "Bars": "0" if self.failure == "zero-bars" else "1 234",
@@ -196,7 +194,7 @@ class ValidationBoundary:
                     return reply()
                 destination.write_bytes(self.files[source])
                 return reply()
-            # Host-to-container source code/configuration transfer is recorded only.
+            self.files[destination.split(":", 1)[1]] = Path(source).read_bytes()
             return reply()
         if operation == "exec":
             if command[-1] == "/etc/plasma/session.env":
@@ -238,13 +236,13 @@ class ValidationBoundary:
             if "wine" in command:
                 program = command[command.index("wine") + 1 :]
                 if program[0] == r"C:\MT5\metaeditor64.exe":
-                    stem = (
-                        "AlgoSamurai"
-                        if any("AlgoSamurai.mq5" in argument for argument in program)
-                        else "Screenshot"
+                    source = next(
+                        argument.removeprefix("/compile:")
+                        for argument in program
+                        if argument.startswith("/compile:")
                     )
-                    folder = "Experts" if stem == "AlgoSamurai" else "Scripts"
-                    base = f"{validator.MT5}/MQL5/{folder}/{stem}"
+                    relative = PureWindowsPath(source).relative_to(r"C:\MT5\MQL5")
+                    base = f"{validator.MT5}/MQL5/{relative.with_suffix('').as_posix()}"
                     self.files[base + ".log"] = (
                         "1 error, 0 warnings"
                         if self.failure == "compile"
@@ -333,6 +331,8 @@ class BrokerValidationTests(unittest.TestCase):
             self.assertEqual(boundary.report_copies, 2)
             self.assertIn("mt5_query", evidence["native_tools"])
             self.assertTrue(evidence["compiled"])
+            self.assertTrue((output / "ExpertMACD.ex5").is_file())
+            self.assertTrue((output / "ExpertMACD-compile.log").is_file())
             self.assertTrue((output / "chart.png").read_bytes().startswith(b"\x89PNG"))
             self.assertTrue((output / "application.png").is_file())
             self.assertEqual(
@@ -349,6 +349,33 @@ class BrokerValidationTests(unittest.TestCase):
             self.assertNotIn("calls", public)
             self.assertNotIn("container", public)
             self.assertTrue(any("-CONT" in command for command in boundary.commands))
+
+    def test_bundled_expert_compiles_in_place_and_is_selected_for_the_tester(self):
+        with tempfile.TemporaryDirectory() as directory:
+            boundary = ValidationBoundary(directory)
+            boundary.run()
+            self.assertEqual(
+                [
+                    argument
+                    for command in boundary.commands
+                    for argument in command
+                    if argument.startswith("/compile:")
+                ],
+                [
+                    r"/compile:C:\MT5\MQL5\Experts\Advisors\ExpertMACD.mq5",
+                    r"/compile:C:\MT5\MQL5\Scripts\Screenshot.mq5",
+                ],
+            )
+            self.assertEqual(
+                [
+                    command[2]
+                    for command in boundary.commands
+                    if command[1] == "cp" and command[2].endswith(".mq5")
+                ],
+                [str(Path("tests/Screenshot.mq5").resolve())],
+            )
+            config = (Path(directory) / "test/tester.ini").read_text()
+            self.assertIn("Expert=Advisors\\ExpertMACD.ex5\n", config)
 
     def test_success_uses_mounted_settings_without_native_handshake_or_env_credentials(
         self,

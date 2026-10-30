@@ -118,10 +118,10 @@ class EvidenceTests(unittest.TestCase):
         self.assertFalse(compilation_ok("Result: 0 errors, 0 warnings", 0))
 
     def test_report_keeps_paired_results(self):
-        html = "<table><tr><td>Expert:</td><td><b>AlgoSamurai</b></td></tr><tr><td>Bars:</td><td>1234</td><td>Total Trades:</td><td>7</td></tr></table>"
+        html = "<table><tr><td>Expert:</td><td><b>ExpertMACD</b></td></tr><tr><td>Bars:</td><td>1234</td><td>Total Trades:</td><td>7</td></tr></table>"
         self.assertEqual(
             report_summary(html),
-            {"Expert": "AlgoSamurai", "Bars": "1234", "Total Trades": "7"},
+            {"Expert": "ExpertMACD", "Bars": "1234", "Total Trades": "7"},
         )
 
     def test_tool_rejects_protocol_error(self):

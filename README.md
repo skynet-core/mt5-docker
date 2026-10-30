@@ -150,7 +150,7 @@ Debian and Ubuntu use pinned WineHQ 11.20 packages from their own release reposi
 
 ## Account configuration and persistence
 
-Account settings are materialized at `C:\MT5\config.ini` as a private UTF-16 file. Passwords are passed at runtime, never as build arguments. The host launcher uses `uv` and dotenv parsing, including quoted passwords and literal dollar signs. `.env` is excluded from Git and the Docker build context. `MT5_ENV_FILE=/absolute/path/account.env` selects an account file outside the checkout. Live EA trading is disabled by default; Strategy Tester can still test the supplied expert.
+Account settings are materialized at `C:\MT5\config.ini` as a private UTF-16 file. Passwords are passed at runtime, never as build arguments. The host launcher uses `uv` and dotenv parsing, including quoted passwords and literal dollar signs. `.env` is excluded from Git and the Docker build context. `MT5_ENV_FILE=/absolute/path/account.env` selects an account file outside the checkout. Live EA trading is disabled by default; Strategy Tester can still test the bundled expert.
 
 The image includes the public server definitions needed to resolve `ICMarketsEU-Demo` on first boot. This cache contains no account data; its source and checksum are recorded in [config/mt5/UPSTREAM](config/mt5/UPSTREAM). For another broker, use its host:port address or seed its public `Config/servers.dat` in the Wine volume.
 
@@ -316,7 +316,7 @@ uv run --locked python tests/validate.py --container mt5-fedora-44 --case fedora
 MT5_ENV_FILE="$PWD/.env" tests/matrix.sh
 ```
 
-The validator checks the exact account/server and downloaded history through `mt5-mcp`, compiles `expert/AlgoSamurai.mq5` with MetaEditor, runs Strategy Tester with a unique report, and retrieves the chart screenshot, MT5 window screenshot, report, parsed statistics, compiler output and service/terminal/tester logs. It prints each evidence directory under `artifacts/`. Backtests use local agents with cloud and remote agents disabled.
+The validator checks the exact account/server and downloaded history through `mt5-mcp`, compiles MT5's bundled `MQL5/Experts/Advisors/ExpertMACD.mq5` with MetaEditor, runs Strategy Tester with a unique report, and retrieves the chart screenshot, MT5 window screenshot, report, parsed statistics, compiler output and service/terminal/tester logs. It prints each evidence directory under `artifacts/`. Backtests use local agents with cloud and remote agents disabled. Custom experts under `expert/` are ignored by Git and are not required by tests.
 
 `tests/matrix.sh` runs all four images across both compositors and all four modes, authenticates VNC/web connections, and captures their remote framebuffer. Pass distro names to select images, for example `tests/matrix.sh fedora-44`. Nested cases require an available host display. The separate `tests/clipboard.py` exchanges text and PNG data with a disposable parent display, checks that its sockets belong to that parent, and saves bidirectional evidence without changing the user's clipboard.
 
