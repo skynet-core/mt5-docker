@@ -60,7 +60,7 @@ ldconfig() {
 runuser() {
     record runuser "$@"
     if [[ ${@: -1} == --validate ]]; then return "${TEST_VALIDATE_STATUS:-0}"; fi
-    printf '{"devices":[{"hardware":true,"vendor":"%s","renderer":"synthetic"}]}\n' "${TEST_GPU_VENDOR:-AMD}"
+    printf '{"devices":[{"hardware":true,"vendor":"%s","renderer":"synthetic"}],"selected":%s}\n' "${TEST_GPU_VENDOR:-AMD}" "${TEST_GPU_SELECTED:-null}"
     return "${TEST_GPU_STATUS:-0}"
 }
 xauth() {
@@ -310,6 +310,48 @@ class ShellInitTests(unittest.TestCase):
                 self.assertEqual(session["LIBGL_ALWAYS_SOFTWARE"], expected)
                 if values.get("TEST_GPU_VENDOR") == "NVIDIA":
                     self.assertEqual(session["PLASMA_NVIDIA_SYNC"], "1")
+
+    def test_selected_nvidia_device_drives_xorg_and_only_nested_sessions_start_a_relay(
+        self,
+    ):
+        selected = {
+            "device": "/dev/dri/renderD128",
+            "vendor": "NVIDIA",
+            "pci_bus_id": "PCI:1@0:0:0",
+        }
+        for backend, mode, host, software, relay in (
+            ("x11", "nested", "wayland", "0", "1"),
+            ("x11", "nested", "x11", "0", "1"),
+            ("x11", "vnc", "none", "0", "0"),
+            ("wayland", "nested", "wayland", "0", "0"),
+            ("x11", "nested", "x11", "1", "0"),
+        ):
+            with self.subTest(backend=backend, mode=mode, host=host, software=software):
+                result, _, _, files = self.display(
+                    host=host,
+                    DISPLAY_BACKEND=backend,
+                    DISPLAY_MODE=mode,
+                    LIBGL_ALWAYS_SOFTWARE=software,
+                    TEST_GPU_VENDOR="NVIDIA",
+                    TEST_GPU_SELECTED=json.dumps(selected),
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                session = dict(
+                    shlex.split(line)[0].split("=", 1)
+                    for line in files["plasma/session.env"].decode().splitlines()
+                )
+                self.assertEqual(session["HOST_DISPLAY_BACKEND"], host)
+                self.assertEqual(session["PLASMA_NVIDIA_NESTED"], relay)
+                if software == "0":
+                    self.assertEqual(session["KWIN_RENDER_NODES"], selected["device"])
+                    self.assertEqual(
+                        session["PLASMA_NVIDIA_BUS_ID"], selected["pci_bus_id"]
+                    )
+                else:
+                    self.assertEqual(session["PLASMA_NVIDIA_BUS_ID"], "")
+                    self.assertNotIn("KWIN_RENDER_NODES", session)
+                if relay == "1":
+                    self.assertEqual(files["plasma/vnc-password"], b"01234567")
 
     def test_nested_preload_capabilities_are_independent_of_nvidia_egl_sync(self):
         for host, backend, mode, vendor, software, remove, nvidia in (

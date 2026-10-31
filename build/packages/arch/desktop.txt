@@ -6,6 +6,7 @@ mesa
 libglvnd
 qt6-wayland
 xorg-xwayland
+xorg-server
 xorg-server-xephyr
 xorg-server-xvfb
 xorg-xdpyinfo

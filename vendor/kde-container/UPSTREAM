@@ -7,6 +7,17 @@ compatibility sources. Existing source copyright and license notices are retaine
 The test-only RFB client in ../../tests/rfb.py is copied from the same source commit.
 
 Local changes:
+- The checksum-pinned TigerVNC 1.16.0 viewer forwards actual pointer coordinates
+  and buttons on viewport entry. FLTK can deliver the first motion as enter
+  after a moved/resized viewer recenters its framebuffer; discarding it leaves
+  the remote cursor at a stale position. The patch uses the existing pointer
+  handler, without a second motion or coordinate adjustment.
+- TigerVNC upstream commits:
+  https://github.com/TigerVNC/tigervnc/commit/b7803f74a21bf6a6a7985edd9382d9dda5e7ece4
+  https://github.com/TigerVNC/tigervnc/commit/be6e25fca026ce715d5be1d7ba40ef49bebbde51
+  These backports preserve the 1.16.0 fingerprint encoding, full digest buffer
+  sizes and support Nettle 3 and 4 authentication APIs. All security types remain
+  enabled; the displayed RealVNC fingerprint still uses its first eight bytes.
 - Native Wayland nesting forwards the position carried by wl_pointer.enter
   before subsequent clicks. A scoped compatibility library preserves all twelve
   current pointer callbacks and the original listener data, including across
@@ -20,9 +31,15 @@ Local changes:
   captures. Tests isolate its full-frame difference against unchanged backgrounds.
 - Read-only RFB test clients no longer move the pointer when disconnecting;
   outstanding buttons and keys are still released.
-- Docker native Wayland nesting requests NVIDIA driver injection automatically
-  when the host driver and NVIDIA runtime exist, preserving explicit GPU,
-  runtime, CDI and software-rendering choices.
+- Docker requests NVIDIA driver injection automatically in every display mode
+  and backend when the host driver and NVIDIA runtime exist, preserving explicit
+  GPU, runtime, CDI and software-rendering choices.
+- Prefer usable NVIDIA EGL devices and pass the selected render node to KWin.
+  NVIDIA X11 sessions use a private Xorg virtual screen on a non-default seat,
+  without accessing host virtual terminals. Nested X11 sessions present that
+  GPU-rendered desktop through an authenticated loopback viewer on the requested
+  host transport; Wayland presentation uses its own rootful Xwayland surface and
+  an isolated KWin window manager with compositing disabled for older viewers.
 - Clipboard relay filters X11 selection negotiation targets (TARGETS, MULTIPLE,
   TIMESTAMP and SAVE_TARGETS) before reading or forwarding data. Their atoms and
   timestamps belong to one X server and are not transferable MIME content.
@@ -38,6 +55,12 @@ Local changes:
 - Allocate and initialize KRFB's virtual-monitor framebuffer before publishing
   its dimensions. An early VNC pixel request otherwise dereferences null before
   PipeWire delivers the first captured frame.
+- KRFB requests shared-memory frames for its CPU framebuffer, avoiding oversized
+  DMA-BUF modifier lists in KPipeWire's format-negotiation buffer while KWin keeps
+  its GPU renderer. Captured images are converted to RGBX8888, matching explicit
+  RFB channel shifts 0/8/16 and 255 maxima. Allocate resized buffers before copying
+  active pixels row by row, skipping padding. Null images preserve the published
+  framebuffer and its geometry.
 - Debian KWin 6.3 NVIDIA VNC/web sessions use the software-capture workaround
   only when the optional /opt/kwin-6.8.2 compositor is absent. Source KWin 6.8.2
   retains the normal GPU path in every mode.
@@ -54,5 +77,5 @@ Local changes:
 - KWin 6.8 software sessions nested on X11 use their virtual compositor and a
   local RFB viewer, avoiding the direct X11 backend's DRI3 requirement. KRFB
   binds only to loopback for this internal relay; viewer clipboard forwarding
-  is disabled in favor of the existing text/image relay. Only the viewer and
-  libraries missing from the runtime are copied from distro build packages.
+  is disabled in favor of the existing text/image relay. Only the source-built
+  viewer and libraries missing from the runtime are copied from its build stage.

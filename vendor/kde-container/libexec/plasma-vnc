@@ -1,6 +1,9 @@
 #!/usr/bin/bash
 set -euo pipefail
 extra=()
+if [[ ${PLASMA_NVIDIA_NESTED:-0} == 1 ]]; then
+	extra+=(-localhost)
+fi
 if [[ $DISPLAY_BACKEND == wayland && ${PLASMA_SOFTWARE_CAPTURE:-0} != 1 ]]; then
 	export PLASMA_KWIN_INPUT=1
 	# Virtualmonitor requires no interactive portal approval.

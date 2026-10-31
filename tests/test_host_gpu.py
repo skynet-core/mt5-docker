@@ -137,14 +137,28 @@ class HostGpuTests(unittest.TestCase):
             )
             return runs[0], [call for call in calls if call[0] == "info"]
 
-    def test_native_wayland_defaults_add_supported_nvidia_once(self):
+    def test_docker_defaults_add_supported_nvidia_once_in_every_display_profile(self):
         for launcher in LAUNCHERS:
-            for host in ("auto", "wayland"):
-                with self.subTest(launcher=launcher.name, host=host):
-                    arguments, queries = self.launch(launcher=launcher, host=host)
-                    self.assertEqual(arguments.count("--gpus"), 1)
-                    self.assertEqual(arguments[arguments.index("--gpus") + 1], "all")
-                    self.assertEqual(len(queries), 1)
+            for backend in ("auto", "wayland", "x11"):
+                for mode, host in (
+                    ("headless", "auto"),
+                    ("vnc", "auto"),
+                    ("web", "auto"),
+                    ("nested", "auto"),
+                    ("nested", "wayland"),
+                    ("nested", "x11"),
+                ):
+                    with self.subTest(
+                        launcher=launcher.name, backend=backend, mode=mode, host=host
+                    ):
+                        arguments, queries = self.launch(
+                            launcher=launcher, backend=backend, mode=mode, host=host
+                        )
+                        self.assertEqual(arguments.count("--gpus"), 1)
+                        self.assertEqual(
+                            arguments[arguments.index("--gpus") + 1], "all"
+                        )
+                        self.assertEqual(len(queries), 1)
 
     def test_unavailable_module_runtime_or_info_does_not_add_gpu_flags(self):
         for options, expected_queries in (
@@ -196,19 +210,27 @@ class HostGpuTests(unittest.TestCase):
                 self.assertNotIn("--gpus", arguments)
                 self.assertFalse(queries)
 
-    def test_other_rendering_paths_do_not_query_docker_for_gpu_options(self):
-        for options in (
-            {"engine": "podman"},
-            {"backend": "x11"},
-            {"host": "x11"},
-            {"mode": "headless"},
-            {"mode": "vnc"},
-            {"mode": "web"},
-        ):
-            with self.subTest(options=options):
-                arguments, queries = self.launch(**options)
-                self.assertNotIn("--gpus", arguments)
-                self.assertFalse(queries)
+    def test_podman_keeps_gpu_selection_explicit_in_every_display_profile(self):
+        for backend in ("wayland", "x11"):
+            for mode, host in (
+                ("headless", "auto"),
+                ("vnc", "auto"),
+                ("web", "auto"),
+                ("nested", "wayland"),
+                ("nested", "x11"),
+            ):
+                with self.subTest(backend=backend, mode=mode, host=host):
+                    arguments, queries = self.launch(
+                        engine="podman", backend=backend, mode=mode, host=host
+                    )
+                    self.assertNotIn("--gpus", arguments)
+                    self.assertFalse(queries)
+
+    def test_podman_forwards_explicit_cdi_selection_without_gpu_detection(self):
+        selected = ("--device", "nvidia.com/gpu=all")
+        arguments, queries = self.launch(*selected, engine="podman")
+        self.assertEqual(arguments[-3:], [*selected, IMAGE])
+        self.assertFalse(queries)
 
     def test_non_nvidia_devices_and_hardware_requests_still_allow_auto_gpu(self):
         for selected, environment in (

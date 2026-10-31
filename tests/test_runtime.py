@@ -204,5 +204,106 @@ class RuntimeArgumentsTests(unittest.TestCase):
         )
 
 
+class HardwareRenderingTests(unittest.TestCase):
+    def probe(self, vendor="NVIDIA Corporation", renderer="NVIDIA GeForce RTX 3090"):
+        return {"devices": [{"vendor": vendor, "renderer": renderer, "hardware": True}]}
+
+    def support(self, renderer="NVIDIA GeForce RTX 3090", vendor="NVIDIA Corporation"):
+        return f"OpenGL vendor string: {vendor}\nOpenGL renderer string: {renderer}\n"
+
+    def test_selected_nvidia_and_amd_only_hardware_are_accepted(self):
+        for vendor, renderer in (
+            ("NVIDIA Corporation", "NVIDIA GeForce RTX 3090"),
+            ("AMD", "AMD Radeon Graphics"),
+        ):
+            with self.subTest(vendor=vendor):
+                probe = self.probe(vendor, renderer)
+                probe["devices"].append(
+                    {"hardware": False, "error": "Unavailable node"}
+                )
+                result = runtime.require_gpu(
+                    probe,
+                    {"LIBGL_ALWAYS_SOFTWARE": "0"},
+                    self.support(renderer, vendor),
+                )
+                self.assertEqual(result["renderer"], renderer)
+                self.assertTrue(result["hardware_gpu_available"])
+                self.assertTrue(result["hardware_rendering"])
+                self.assertFalse(result["software_fallback"])
+
+    def test_hybrid_machine_must_select_nvidia_when_it_is_available(self):
+        probe = self.probe()
+        probe["devices"] += self.probe("AMD", "AMD Radeon Graphics")["devices"]
+        with self.assertRaisesRegex(RuntimeError, "available NVIDIA GPU"):
+            runtime.require_gpu(
+                probe,
+                {"LIBGL_ALWAYS_SOFTWARE": "0"},
+                self.support("AMD Radeon Graphics", "AMD"),
+            )
+        self.assertTrue(
+            runtime.require_gpu(probe, {"LIBGL_ALWAYS_SOFTWARE": "0"}, self.support())[
+                "hardware_rendering"
+            ]
+        )
+
+    def test_explicit_fallback_and_every_software_renderer_fail_gpu_acceptance(self):
+        for session in ({}, {"LIBGL_ALWAYS_SOFTWARE": "1"}):
+            with (
+                self.subTest(session=session),
+                self.assertRaisesRegex(RuntimeError, "software fallback"),
+            ):
+                runtime.require_gpu(self.probe(), session, self.support())
+        with self.assertRaisesRegex(RuntimeError, "software fallback"):
+            runtime.require_gpu(
+                {**self.probe(), "forced_software": True},
+                {"LIBGL_ALWAYS_SOFTWARE": "0"},
+                self.support(),
+            )
+        for renderer in (*runtime.SOFTWARE_RENDERERS, ""):
+            with (
+                self.subTest(renderer=renderer),
+                self.assertRaisesRegex(RuntimeError, "requested hardware renderer"),
+            ):
+                runtime.require_gpu(
+                    self.probe(),
+                    {"LIBGL_ALWAYS_SOFTWARE": "0"},
+                    self.support(renderer.upper()),
+                )
+
+    def test_a_hardware_egl_context_is_required_even_with_a_nvidia_compositor(self):
+        for probe in (
+            {"devices": []},
+            {"devices": [{"hardware": False, "error": "EGL failed"}]},
+            self.probe("Mesa", "llvmpipe"),
+        ):
+            with (
+                self.subTest(probe=probe),
+                self.assertRaisesRegex(RuntimeError, "hardware EGL context"),
+            ):
+                runtime.require_gpu(
+                    probe, {"LIBGL_ALWAYS_SOFTWARE": "0"}, self.support()
+                )
+
+    def test_malformed_gpu_probe_data_never_counts_as_hardware(self):
+        for probe in (
+            None,
+            [],
+            {},
+            {"devices": {}},
+            {"devices": [None]},
+            {"devices": [{"hardware": "true"}]},
+            {"devices": [{"hardware": True, "vendor": "NVIDIA"}]},
+            {"devices": [{"hardware": True, "vendor": None, "renderer": "NVIDIA"}]},
+            {**self.probe(), "forced_software": "false"},
+        ):
+            with (
+                self.subTest(probe=probe),
+                self.assertRaisesRegex(RuntimeError, "Malformed GPU probe"),
+            ):
+                runtime.require_gpu(
+                    probe, {"LIBGL_ALWAYS_SOFTWARE": "0"}, self.support()
+                )
+
+
 if __name__ == "__main__":
     unittest.main()

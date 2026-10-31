@@ -45,12 +45,60 @@
  
 --- a/framebuffers/pipewire/pw_framebuffer.cpp
 +++ b/framebuffers/pipewire/pw_framebuffer.cpp
-@@ -113,5 +113,8 @@
+@@ -112,6 +112,12 @@
+     : q(q)
      , stream(new PipeWireSourceStream(q))
  {
 +    // Request damaged regions so a small UI change does not re-encode the
 +    // entire desktop. handleFrame() already consumes this metadata.
 +    stream->setDamageEnabled(true);
++    // VNC consumes CPU pixels; SHM avoids overflowing KPipeWire's fixed
++    // format buffer when GPU drivers advertise many DMA-BUF modifiers.
++    stream->setAllowDmaBuf(false);
      QObject::connect(stream.get(), &PipeWireSourceStream::frameReceived, q, [this](const PipeWireFrame &frame) {
          handleFrame(frame);
      });
+@@ -361,16 +367,23 @@
+ 
+ #if KPIPEWIRE60
+     if (frame.image) {
+-        memcpy(q->fb, frame.image->constBits(), frame.image->sizeInBytes());
+-        setVideoSize(frame.image->size());
+-    }
++        const QImage image = frame.image->convertToFormat(QImage::Format_RGBX8888);
+ #else
+     if (frame.dataFrame) {
+-        // FIXME: Assuming stride == width * 4, not sure to which extent this holds
+-        setVideoSize(frame.dataFrame->size);
+-        memcpy(q->fb, frame.dataFrame->data, frame.dataFrame->size.height() * frame.dataFrame->stride);
+-    }
++        const QImage image = frame.dataFrame->toImage().convertToFormat(QImage::Format_RGBX8888);
+ #endif
++        if (image.isNull()) {
++            return;
++        }
++        setVideoSize(image.size());
++        if (!q->fb) {
++            return;
++        }
++        const size_t rowBytes = static_cast<size_t>(image.width()) * BYTES_PER_PIXEL;
++        for (int row = 0; row < image.height(); ++row) {
++            memcpy(q->fb + row * rowBytes, image.constScanLine(row), rowBytes);
++        }
++    }
+     else if (frame.dmabuf) {
+         // FIXME: Assuming stride == width * 4, not sure to which extent this holds
+         const QSize size = {frame.dmabuf->width, frame.dmabuf->height};
+@@ -492,6 +505,12 @@
+     format.depth = 32;
+     format.trueColour = true;
+     format.bigEndian = false;
++    format.redMax = 255;
++    format.greenMax = 255;
++    format.blueMax = 255;
++    format.redShift = 0;
++    format.greenShift = 8;
++    format.blueShift = 16;
+ }
+ 
+ void PWFrameBuffer::startMonitor()

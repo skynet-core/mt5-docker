@@ -142,15 +142,27 @@ set_tests_properties(pointer-enter-wire-warp-baseline pointer-enter-wire-warp-fi
     PROPERTIES SKIP_RETURN_CODE 77)
 
 add_executable(fixture-unit fixture-unit.cpp)
+find_program(TIGERVNC_TEST_PROGRAM NAMES viewport-enter
+    PATHS /tigervnc-build/vncviewer NO_DEFAULT_PATH REQUIRED)
+add_test(NAME tigervnc-pointer-enter COMMAND "${TIGERVNC_TEST_PROGRAM}")
+set_tests_properties(tigervnc-pointer-enter PROPERTIES TIMEOUT 30)
+find_program(TIGERVNC_CRYPTO_TEST_PROGRAM NAMES viewer-crypto
+    PATHS /tigervnc-build/vncviewer NO_DEFAULT_PATH REQUIRED)
+add_test(NAME tigervnc-crypto COMMAND "${TIGERVNC_CRYPTO_TEST_PROGRAM}")
+set_tests_properties(tigervnc-crypto PROPERTIES TIMEOUT 30)
+find_program(KRFB_FRAME_TEST_PROGRAM NAMES krfb-frame-unit
+    PATHS /krfb-build/bin NO_DEFAULT_PATH REQUIRED)
+add_test(NAME krfb-shm-frame COMMAND "${KRFB_FRAME_TEST_PROGRAM}")
+set_tests_properties(krfb-shm-frame PROPERTIES TIMEOUT 30)
 target_link_libraries(fixture-unit PRIVATE Qt6::Widgets Qt6::DBus Qt6::Test dl)
-foreach(scenario text text-save-failed images publish-image image-save-failed invalid-args capture-ok capture-cursor capture-cursor-x11 capture-invalid-size capture-error capture-save-failed capture-no-screen capture-temp-failed capture-incomplete capture-x11)
+foreach(scenario text text-save-failed images publish-image image-save-failed invalid-args capture-ok capture-cursor capture-cursor-x11 capture-invalid-size capture-error capture-save-failed capture-no-screen capture-temp-failed capture-incomplete capture-x11 capture-x11-empty)
     add_test(NAME fixture-${scenario} COMMAND fixture-unit ${scenario})
 endforeach()
 add_executable(benchmark-unit benchmark-unit.cpp)
 target_link_libraries(benchmark-unit PRIVATE Qt6::Widgets Qt6::Test)
 add_test(NAME benchmark-ui COMMAND benchmark-unit)
 
-set_tests_properties(fixture-capture-x11 PROPERTIES SKIP_RETURN_CODE 77)
+set_tests_properties(fixture-capture-x11 fixture-capture-x11-empty PROPERTIES SKIP_RETURN_CODE 77)
 add_executable(clipboard-protocol-unit clipboard-protocol-unit.cpp fake-wayland.cpp)
 target_link_libraries(clipboard-protocol-unit PRIVATE protocols Qt6::Gui PkgConfig::XKB)
 foreach(scenario ext wlr-v1 wlr-v2 prefer-ext-first oversize-offer endpoint-wayland endpoint-x11 read-eintr read-eagain bridge bridge-fallback bridge-worker-zero)

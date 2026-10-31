@@ -91,6 +91,7 @@ class RenderingPolicyTests(unittest.TestCase):
                         env={
                             **os.environ,
                             "VIEWER_HELP": help_text,
+                            "HOST_DISPLAY_BACKEND": "x11",
                             "HOST_DISPLAY": ":42",
                             "HOST_XAUTHORITY": "/tmp/host-auth",
                             "DISPLAY_WIDTH": "800",

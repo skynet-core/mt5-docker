@@ -1,17 +1,52 @@
 #!/usr/bin/bash
 set -euo pipefail
-# The loopback-only relay keeps KWin as compositor without requiring host DRI3.
-export DISPLAY=$HOST_DISPLAY XAUTHORITY=$HOST_XAUTHORITY
-unset WAYLAND_DISPLAY
+if [[ ${1:-} == --present ]]; then
+	shift
+	pids=()
+	# Invoked by EXIT when the presentation WM or viewer terminates.
+	# shellcheck disable=SC2317,SC2329
+	cleanup() {
+		kill "${pids[@]}" 2>/dev/null || true
+		wait "${pids[@]}" 2>/dev/null || true
+	}
+	trap cleanup EXIT
+	trap 'exit 0' TERM INT
+	KWIN_COMPOSE=N /usr/bin/kwin_x11 --replace &
+	pids+=("$!")
+	/usr/local/libexec/plasma-wait compositor
+	"$@" &
+	pids+=("$!")
+	wait -n "${pids[@]}"
+	exit $?
+fi
+# The relay keeps GPU composition independent of the host's DRI3 support.
+viewer_options=()
+if [[ $HOST_DISPLAY_BACKEND == wayland ]]; then
+	export WAYLAND_DISPLAY=$HOST_WAYLAND_DISPLAY
+	/usr/bin/Xwayland "$PLASMA_SOFTWARE_DISPLAY" -auth /etc/plasma/Xauthority \
+		-nolisten tcp -noreset -geometry "${DISPLAY_WIDTH}x${DISPLAY_HEIGHT}" -shm &
+	export DISPLAY=$PLASMA_SOFTWARE_DISPLAY XAUTHORITY=/etc/plasma/Xauthority
+	/usr/local/libexec/plasma-wait x11
+	viewer_options+=(-FullScreen=1)
+else
+	export DISPLAY=$HOST_DISPLAY XAUTHORITY=$HOST_XAUTHORITY
+	unset WAYLAND_DISPLAY
+fi
 viewer_help=$(/usr/bin/vncviewer --help 2>&1 || true)
 if [[ $viewer_help == *ShortcutModifiers* ]]; then
 	shortcut=-ShortcutModifiers=
 else
 	shortcut=-MenuKey=
 fi
-exec /usr/bin/vncviewer -PasswordFile=/etc/plasma/vnc-auth \
-	"$shortcut" \
-	-FullColor=1 -RemoteResize=0 \
-	-AcceptClipboard=0 -SendClipboard=0 -SendPrimary=0 -SetPrimary=0 \
-	-AlertOnFatalError=0 -ReconnectOnError=0 \
-	-geometry "${DISPLAY_WIDTH}x${DISPLAY_HEIGHT}+0+0" 127.0.0.1::5900
+viewer=(/usr/bin/vncviewer -PasswordFile=/etc/plasma/vnc-auth
+	"${viewer_options[@]}"
+	"$shortcut"
+	-FullColor=1 -RemoteResize=0
+	-AcceptClipboard=0 -SendClipboard=0 -SendPrimary=0 -SetPrimary=0
+	-AlertOnFatalError=0 -ReconnectOnError=0
+	-geometry "${DISPLAY_WIDTH}x${DISPLAY_HEIGHT}+0+0" 127.0.0.1::5900)
+if [[ $HOST_DISPLAY_BACKEND == wayland ]]; then
+	# Legacy FLTK fullscreen needs a WM; isolate its non-compositing presentation.
+	exec dbus-run-session -- "$0" --present "${viewer[@]}"
+fi
+exec "${viewer[@]}"

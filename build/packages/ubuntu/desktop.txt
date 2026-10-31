@@ -10,6 +10,7 @@ libgles2
 libgbm1
 qt6-wayland
 xwayland
+xserver-xorg-core
 xserver-xephyr
 xvfb
 x11-utils

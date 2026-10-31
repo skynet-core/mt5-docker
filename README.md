@@ -238,11 +238,15 @@ The launcher discovers the host Wayland/X11 socket and Xauthority cookie. `HOST_
 
 VNC passwords are limited to eight printable ASCII characters by the protocol. `VNC_PASSWORD_FILE` mounts a private password file. `VNC_PORT`, `WEB_PORT`, and `BIND_ADDRESS` control the host binding; the default address is `127.0.0.1`.
 
-The startup GPU probe tests EGL/GBM rendering on available devices; KWin selects its rendering GPU separately. `bin/mt5-run -e LIBGL_ALWAYS_SOFTWARE=1` requests Mesa software rendering. CPU regression tests also hide physical DRI devices before init: KWin/Wine can enumerate those devices even with this variable set.
+The startup GPU probe tests EGL/GBM rendering on available devices and prefers usable NVIDIA hardware. Wayland KWin receives the selected render node; NVIDIA X11 sessions use a private Xorg virtual screen without opening or switching the host's virtual terminals. `bin/mt5-run -e LIBGL_ALWAYS_SOFTWARE=1` requests Mesa software rendering. CPU regression tests also hide physical DRI devices before init: KWin/Wine can enumerate those devices even with this variable set.
 
-Docker native Wayland nesting automatically adds `--gpus all` when the host NVIDIA driver and NVIDIA Container Toolkit runtime are available. This supplies the driver libraries needed to exchange frames with an NVIDIA host compositor; access to an AMD GPU alone can otherwise leave the nested window black. Explicit GPU, runtime, CDI and software-rendering arguments take precedence. For other modes on an NVIDIA host configured with NVIDIA Container Toolkit, pass `--gpus all` to `bin/mt5-run`.
+The Docker launcher automatically adds `--gpus all` in every display mode and backend when the host NVIDIA driver and NVIDIA Container Toolkit runtime are available. This supplies NVIDIA's container driver libraries. Explicit GPU, runtime, CDI and software-rendering arguments take precedence.
+
+Nested NVIDIA X11 sessions present their GPU desktop through an authenticated loopback viewer. On Wayland hosts, a separate KWin with compositing disabled manages the viewer inside a private rootful Xwayland surface. The main compositor renders on NVIDIA; frames are copied to the host window for presentation.
 
 The nested NVIDIA fence fix is scoped to KWin; WebView2 uses software rendering. The Debian/Ubuntu source variant builds KWin 6.8.2 with a matching Qt/KF stack under `/opt/kwin-6.8.2`, enabling the normal GPU path in Wayland VNC/web modes. Debian's distro variant uses software capture for NVIDIA VNC/web with its older KWin. Native KRFB, clipboard helpers and kiosk applications retain their distro Qt libraries. Arch's removed X11 compositor is built separately from pinned KWin-X11 sources, with compilers excluded from the final image.
+
+MT5 startup installs `--disable-gpu` as the default `terminal64.exe` value under `HKLM\Software\Policies\Microsoft\Edge\WebView2\AdditionalBrowserArguments`, including in retained Wine volumes. Wine reports MT5 as a high-integrity host, so WebView2 ignores the former environment override. Without the effective policy, Chromium can fail to produce frames and Market windows show the charts behind them. An existing nonempty application policy is preserved; custom policies need to retain `--disable-gpu` for this browser workaround.
 
 ```sh
 # With IMAGE_TAG, CONTAINER_NAME and MT5_VOLUME selected as above:
@@ -363,7 +367,7 @@ for distro in fedora-44 debian-13 ubuntu-26.04 archlinux; do
 done
 ```
 
-Evidence is under `artifacts/mt5-input/<distribution>/<backend>/<mode>/`, with `on-wayland/` or `on-x11/` below nested cases. It includes startup, keyboard, menu and final screenshots, expected/observed text, read-only GUI state, the last input phase and service/compositor logs. Web cases also retain a browser trace. `results.json` fails when any expected case or input assertion fails. Add `--gpu` for a separate NVIDIA hardware run; Wayland uses NVIDIA while the X11/Xvfb profiles use llvmpipe. Standard CI hides physical DRI devices inside the test namespace to exercise software rendering. Both tiers hide host audio, input and USB devices before init.
+Evidence is under `artifacts/mt5-input/<distribution>/<backend>/<mode>/`, with `on-wayland/` or `on-x11/` below nested cases. It includes startup, keyboard, menu and final screenshots, expected/observed text, read-only GUI state, the last input phase and service/compositor logs. Web cases also retain a browser trace. `results.json` fails when any expected case or input assertion fails. Add `--gpu` for a separate hardware run: the EGL probe and actual compositor renderer must prove hardware rendering, and usable NVIDIA hardware must be selected when present. Software fallback fails this tier. Standard CI hides physical DRI devices inside the test namespace to exercise software rendering. Both tiers hide host audio, input and USB devices before init.
 
 The startup regression repeats these profiles with `--startup autologin`. It uses a dummy login on an internal network, so the terminal skips the company-selection dialog without reaching a broker. That dialog previously refreshed Wine's window geometry and hid an offset in the first chart click. A test expert draws flat colored targets; the test locates them in screenshots and checks their actual MT5 chart-local click coordinates and object names. Compilation runs in a separate disposable container before the tested session starts. No menu, dialog or MetaEditor window may repair the tested session before its first chart click.
 
@@ -390,6 +394,18 @@ done
 ```
 
 Results, coordinate comparisons, cursor captures and per-case logs are saved under `artifacts/pointer-matrix/<distribution>/scale-<percent>/<backend>/nested/on-<transport>/`. CI requires both the eight GUI profiles and all twelve scaled profiles before publishing each image. The native tests also exercise the Wayland enter-and-click sequence over a real private protocol connection, including the failing behavior without the compatibility fix.
+
+The Market rendering suite adds ten profiles per image, including genuine headless capture. It selects Market through the Navigator tree with real input, then checks initial painting, resizing and closing/reopening. Browser DOM, paint events and animation frames must be present, and Chromium's screenshot must agree with the native browser window, compositor output and visible transport pixels. Blank windows and charts showing through fail the gate. Diagnostic browser flags bind only inside the disposable test container; the test never supplies the production `--disable-gpu` workaround itself.
+
+```sh
+for distro in fedora-44 debian-13 ubuntu-26.04 archlinux; do
+  uv run --locked python tests/mt5_market.py \
+    --image "mt5:$distro" --parent-image "mt5:runtime-test-$distro" \
+    --case "$distro" --output artifacts/mt5-market
+done
+```
+
+CI requires these ten Market profiles before publishing and retains their screenshots and browser/compositor diagnostics. Headless cases activate the page through their private X11 backing display or native Wine input, with VNC/web services inactive. Add `--gpu` for hardware validation; Debian/Ubuntu production and parent fixture images must use the source KWin variant for this tier.
 
 CI also repeats all twelve scaled profiles with `--startup autologin`, retaining their evidence under `artifacts/autologin-pointer-matrix/`. The two startup variants add twenty profiles per image. Their expert, compiler output, input CSV and screenshots remain test artifacts and add no dependencies to the published runtime.
 
@@ -475,9 +491,9 @@ Required: **94% for every executable source file**. Branch coverage is available
 </details>
 <!-- coverage-report:end -->
 
-CI requires **at least 94% executable-line coverage for each maintained Python, C++ and Bash source file**, including test code, helpers, extensionless scripts and maintained code under `vendor/kde-container`. An uncovered file fails even if the repository average is high. Python and C++ branch coverage is reported separately. Fetched dependencies and generated compiler output are outside the maintained-source inventory.
+CI requires **at least 94% executable-line coverage for each maintained application and build source file**, including helpers, extensionless scripts and maintained code under `vendor/kde-container`. An uncovered file fails even if the repository average is high. Test sources, `ui-fixture.cpp` and `vnc-benchmark.cpp` are linted but excluded from this coverage gate. Python and C++ branch coverage is reported separately. Fetched dependencies and generated compiler output are outside the maintained-source inventory.
 
-Python uses `coverage.py`, native tests compile the actual C++ with GCC coverage, and Bash uses `shfmt` command locations plus a metadata-only DEBUG trace. The shell trace records source paths and line numbers; it does not record commands, environment values or credentials. Source hashes reject coverage from changed revisions. The declaration-only `tests/native/fake-wayland.h` is listed as N/A with its compiler audit and an exact source hash; edits require re-audit and cannot silently inherit that classification.
+Python uses `coverage.py`, native tests compile the actual C++ with GCC coverage, and Bash uses `shfmt` command locations plus a metadata-only DEBUG trace. The shell trace records source paths and line numbers; it does not record commands, environment values or credentials. Source hashes reject coverage from changed revisions.
 
 ```sh
 go install mvdan.cc/sh/v3/cmd/shfmt@v3.14.1

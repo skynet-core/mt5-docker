@@ -13,7 +13,7 @@ import types
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import Mock, call, patch
+from unittest.mock import ANY, Mock, call, patch
 
 import mt5_input
 import mt5_ui_probe
@@ -377,6 +377,7 @@ class BrowserTransportTests(unittest.TestCase):
         context = browser.new_context.return_value
         page = context.new_page.return_value
         canvas, overlay = Mock(), Mock()
+        canvas.count.return_value = 0
         page.locator.side_effect = lambda selector: (
             canvas if selector == "#noVNC_container canvas" else overlay
         )
@@ -404,14 +405,23 @@ class BrowserTransportTests(unittest.TestCase):
                 operation.side_effect = fail_once
                 with patch.object(mt5_input, "sync_playwright", return_value=manager):
                     client = mt5_input.BrowserClient(6080, Path(directory))
-                page.reload.assert_called_once_with()
+                page.reload.assert_called_once_with(timeout=ANY)
                 self.assertTrue(client.network_change_reload)
                 client.close()
                 metadata = json.loads(
                     (Path(directory) / "browser-startup.json").read_text()
                 )
+                self.assertEqual(len(metadata["startup_attempts"]), 2)
+                self.assertTrue(
+                    metadata["startup_attempts"][0]["network_change_recovery"]
+                )
+                self.assertEqual(metadata["startup_attempts"][-1]["stage"], "ready")
                 self.assertEqual(
-                    metadata,
+                    {
+                        key: value
+                        for key, value in metadata.items()
+                        if key != "startup_attempts"
+                    },
                     {
                         "network_change_reload": True,
                         "failed_requests": [
@@ -476,36 +486,123 @@ class BrowserTransportTests(unittest.TestCase):
                 browser.close.assert_called_once_with()
                 driver.stop.assert_called_once_with()
 
-    def test_second_network_change_is_fatal_without_another_reload(self):
+    def test_repeated_preconnect_network_changes_recover_before_canvas_or_input(self):
         with tempfile.TemporaryDirectory() as directory:
             manager, driver, browser, context, page, canvas = self.browser_fixture()
+            state = {"navigation": 0, "cancelled": False, "seconds": 0.0}
 
-            def rejected(*_args, **_kwargs):
+            def navigate(*_args, **_kwargs):
+                state["navigation"] += 1
+                state["cancelled"] = state["navigation"] <= 2
+                if state["cancelled"]:
+                    page.on.call_args.args[1](
+                        SimpleNamespace(
+                            url="http://private/module.js?password=excluded",
+                            failure="net::ERR_NETWORK_CHANGED",
+                            resource_type="script",
+                        )
+                    )
+
+            def impossible_canvas(*_args, **_kwargs):
+                if state["cancelled"]:
+                    state["seconds"] += 30
+                    raise RuntimeError("module graph cannot create a canvas")
+
+            page.goto.side_effect = page.reload.side_effect = navigate
+            canvas.wait_for.side_effect = impossible_canvas
+            with (
+                patch.object(mt5_input, "sync_playwright", return_value=manager),
+                patch.object(
+                    mt5_input,
+                    "time",
+                    SimpleNamespace(monotonic=lambda: state["seconds"]),
+                ),
+            ):
+                client = mt5_input.BrowserClient(6080, Path(directory))
+            self.assertEqual(page.reload.call_count, 2)
+            self.assertEqual(canvas.wait_for.call_count, 1)
+            self.assertEqual(state["seconds"], 0)
+            self.assertEqual(page.mouse.mock_calls, [])
+            self.assertEqual(page.keyboard.mock_calls, [])
+            client.close()
+            metadata = json.loads(
+                (Path(directory) / "browser-startup.json").read_text()
+            )
+            self.assertEqual(
+                [a["stage"] for a in metadata["startup_attempts"]],
+                ["navigation", "navigation", "ready"],
+            )
+            self.assertEqual(len(metadata["failed_requests"]), 2)
+            self.assertTrue(
+                all(
+                    r["url"] == "http://private/module.js"
+                    for r in metadata["failed_requests"]
+                )
+            )
+            browser.close.assert_called_once()
+            driver.stop.assert_called_once()
+
+    def test_network_change_budget_expires_and_records_final_attempt(self):
+        with tempfile.TemporaryDirectory() as directory:
+            manager, _, browser, _, page, canvas = self.browser_fixture()
+            seconds = [0.0]
+
+            def cancel(*_args, **_kwargs):
+                seconds[0] += 20
                 page.on.call_args.args[1](
                     SimpleNamespace(
-                        url="http://private/app/ui.js",
+                        url="http://private/module.js",
                         failure="net::ERR_NETWORK_CHANGED",
                         resource_type="script",
                     )
                 )
-                raise RuntimeError(f"network failure {canvas.wait_for.call_count}")
 
-            canvas.wait_for.side_effect = rejected
+            page.goto.side_effect = page.reload.side_effect = cancel
             with (
                 patch.object(mt5_input, "sync_playwright", return_value=manager),
-                self.assertRaisesRegex(RuntimeError, "network failure 2"),
+                patch.object(
+                    mt5_input, "time", SimpleNamespace(monotonic=lambda: seconds[0])
+                ),
+                self.assertRaisesRegex(RuntimeError, "module load cancelled"),
             ):
                 mt5_input.BrowserClient(6080, Path(directory))
-            page.reload.assert_called_once_with()
-            self.assertEqual(canvas.wait_for.call_count, 2)
+            self.assertEqual(seconds[0], 60)
+            self.assertEqual(page.reload.call_count, 2)
+            self.assertEqual(page.reload.call_args.kwargs["timeout"], 20000)
+            canvas.wait_for.assert_not_called()
             metadata = json.loads(
                 (Path(directory) / "browser-startup.json").read_text()
             )
-            self.assertTrue(metadata["network_change_reload"])
-            self.assertEqual(len(metadata["failed_requests"]), 2)
-            context.tracing.stop.assert_called_once()
-            browser.close.assert_called_once_with()
-            driver.stop.assert_called_once_with()
+            self.assertEqual(len(metadata["startup_attempts"]), 3)
+            self.assertFalse(
+                metadata["startup_attempts"][-1]["network_change_recovery"]
+            )
+            browser.close.assert_called_once()
+
+    def test_late_network_change_after_canvas_creation_remains_fatal(self):
+        with tempfile.TemporaryDirectory() as directory:
+            manager, _, _, _, page, canvas = self.browser_fixture()
+            canvas.count.return_value = 1
+
+            def fail(*_args, **_kwargs):
+                page.on.call_args.args[1](
+                    SimpleNamespace(
+                        url="http://private/module.js",
+                        failure="net::ERR_NETWORK_CHANGED",
+                        resource_type="script",
+                    )
+                )
+                raise ValueError("post-connect failure")
+
+            canvas.wait_for.side_effect = fail
+            with (
+                patch.object(mt5_input, "sync_playwright", return_value=manager),
+                self.assertRaisesRegex(ValueError, "post-connect failure"),
+            ):
+                mt5_input.BrowserClient(6080, Path(directory))
+            page.reload.assert_not_called()
+            self.assertEqual(page.mouse.mock_calls, [])
+            self.assertEqual(page.keyboard.mock_calls, [])
 
     def test_metadata_write_error_still_releases_every_browser_resource(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -678,7 +775,8 @@ class BrowserTransportTests(unittest.TestCase):
                 ],
             )
             page.goto.assert_called_once_with(
-                "http://172.23.0.7:6080/vnc.html?autoconnect=true&resize=off&password=testpass"
+                "http://172.23.0.7:6080/vnc.html?autoconnect=true&resize=off&password=testpass",
+                timeout=ANY,
             )
             canvas.wait_for.assert_called_once_with(state="visible", timeout=30000)
             transition.wait_for.assert_called_once_with(state="hidden", timeout=30000)
@@ -1351,6 +1449,110 @@ class InputMatrixTests(unittest.TestCase):
                     ),
                     1,
                 )
+
+    def test_gpu_profiles_require_the_available_nvidia_renderer_before_input(self):
+        for failure in (None, "amd", "software", "fallback", "malformed", "support"):
+            with (
+                self.subTest(failure=failure),
+                tempfile.TemporaryDirectory() as directory,
+            ):
+                sessions = {}
+
+                def start(
+                    _runtime,
+                    _image,
+                    name,
+                    backend,
+                    mode,
+                    *_args,
+                    sessions=sessions,
+                    failure=failure,
+                    **_options,
+                ):
+                    sessions[name] = {
+                        "DISPLAY_BACKEND": backend,
+                        "DISPLAY_MODE": mode,
+                        "HOST_DISPLAY_BACKEND": "none",
+                        "LIBGL_ALWAYS_SOFTWARE": "1" if failure == "fallback" else "0",
+                    }
+
+                def execute(*arguments, failure=failure, **_options):
+                    stdout = b""
+                    returncode = 0
+                    if arguments[-1] == "/etc/plasma/gpu.json":
+                        stdout = json.dumps(
+                            {"devices": [None]}
+                            if failure == "malformed"
+                            else {
+                                "devices": [
+                                    {
+                                        "hardware": True,
+                                        "vendor": vendor,
+                                        "renderer": vendor,
+                                    }
+                                    for vendor in ("AMD", "NVIDIA")
+                                ]
+                            }
+                        ).encode()
+                    elif arguments[-1] == "supportInformation":
+                        renderer = (
+                            "AMD Radeon Graphics"
+                            if failure == "amd"
+                            else "llvmpipe"
+                            if failure == "software"
+                            else "NVIDIA GeForce RTX 3090"
+                        )
+                        stdout = f"OpenGL renderer string: {renderer}\n".encode()
+                        returncode = int(failure == "support")
+                    return subprocess.CompletedProcess(
+                        arguments, returncode, stdout, b""
+                    )
+
+                args = SimpleNamespace(
+                    output=directory,
+                    case="gpu",
+                    runtime="docker",
+                    parent_image="private-parent",
+                    image="private-image",
+                    gpu=True,
+                    backends=["wayland"],
+                    modes=["vnc"],
+                )
+                with (
+                    patch.object(mt5_input, "execute", side_effect=execute),
+                    patch.object(mt5_input, "start", side_effect=start),
+                    patch.object(mt5_input, "connect", return_value=Mock()),
+                    patch.object(
+                        mt5_input,
+                        "parent_x11",
+                        return_value=(":123", Path(directory) / "cookie"),
+                    ),
+                    patch.object(
+                        mt5_input,
+                        "configuration",
+                        side_effect=lambda _runtime, name, sessions=sessions: sessions[
+                            name
+                        ],
+                    ),
+                    patch.object(mt5_input, "Probe", return_value=Mock()),
+                    patch.object(
+                        mt5_input, "exercise", return_value={"passed": True}
+                    ) as exercise,
+                    patch.object(mt5_input, "collect"),
+                    contextlib.redirect_stdout(io.StringIO()),
+                ):
+                    self.assertEqual(mt5_input.main(args), int(failure is not None))
+                output = Path(directory) / "gpu/wayland/vnc"
+                case = json.loads((output / "results.json").read_text())
+                self.assertEqual(case["passed"], failure is None)
+                for name in ("gpu.json", "session.json", "compositor.log"):
+                    self.assertTrue((output / name).is_file())
+                if failure:
+                    exercise.assert_not_called()
+                else:
+                    exercise.assert_called_once()
+                    self.assertEqual(case["renderer"], "NVIDIA GeForce RTX 3090")
+                    self.assertTrue(case["hardware_rendering"])
 
     def test_all_requested_profiles_keep_offline_account_free_resources_and_cleanup(
         self,

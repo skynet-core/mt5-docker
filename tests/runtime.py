@@ -18,6 +18,66 @@ from display_matrix import case_path, check_screenshot, profiles
 from PIL import Image, ImageChops, ImageFilter
 from rfb import RFBClient
 
+SOFTWARE_RENDERERS = (
+    "llvmpipe",
+    "softpipe",
+    "swrast",
+    "software rasterizer",
+    "swiftshader",
+    "lavapipe",
+)
+
+
+def require_gpu(gpu, session, support):
+    devices = gpu.get("devices") if isinstance(gpu, dict) else None
+    if (
+        not isinstance(devices, list)
+        or type(gpu.get("forced_software", False)) is not bool
+        or any(
+            not isinstance(device, dict)
+            or type(device.get("hardware")) is not bool
+            or (
+                device["hardware"]
+                and any(
+                    not isinstance(device.get(key), str) or not device[key].strip()
+                    for key in ("vendor", "renderer")
+                )
+            )
+            for device in devices
+        )
+    ):
+        raise RuntimeError("Malformed GPU probe data")
+    if (
+        not isinstance(session, dict)
+        or session.get("LIBGL_ALWAYS_SOFTWARE") != "0"
+        or gpu.get("forced_software")
+    ):
+        raise RuntimeError("Requested GPU was replaced by a software fallback")
+    hardware = [device for device in devices if device["hardware"]]
+    if not hardware or any(
+        token in device["renderer"].lower()
+        for device in hardware
+        for token in SOFTWARE_RENDERERS
+    ):
+        raise RuntimeError("Requested GPU could not create a hardware EGL context")
+    renderer = re.search(r"^OpenGL renderer string:[ \t]*(.*)$", support, re.MULTILINE)
+    renderer = renderer.group(1).strip() if renderer else ""
+    if not renderer or any(token in renderer.lower() for token in SOFTWARE_RENDERERS):
+        raise RuntimeError("Compositor did not use the requested hardware renderer")
+    vendor = re.search(r"^OpenGL vendor string:[ \t]*(.*)$", support, re.MULTILINE)
+    vendor = vendor.group(1).strip() if vendor else ""
+    if (
+        any("nvidia" in device["vendor"].lower() for device in hardware)
+        and "nvidia" not in (vendor + " " + renderer).lower()
+    ):
+        raise RuntimeError("Compositor did not select the available NVIDIA GPU")
+    return {
+        "hardware_gpu_available": True,
+        "renderer": renderer,
+        "software_fallback": False,
+        "hardware_rendering": True,
+    }
+
 
 def execute(*arguments, check=True):
     return subprocess.run(arguments, capture_output=True, check=check)
@@ -39,6 +99,7 @@ def collect(runtime, container, output):
             ],
         ),
         ("units.log", ["exec", container, "systemctl", "--failed", "--no-pager"]),
+        ("xorg.log", ["exec", container, "cat", "/run/plasma/Xorg.log"]),
     ):
         result = execute(runtime, *command, check=False)
         (output / filename).write_bytes(result.stdout + result.stderr)
@@ -533,10 +594,11 @@ def main(args):
                     raise RuntimeError(
                         "Kiosk services did not receive the safe generic Qt theme"
                     )
-                gpu = json.loads(
-                    execute(runtime, "exec", name, "cat", "/etc/plasma/gpu.json").stdout
-                )
-                (case / "gpu.json").write_text(json.dumps(gpu, indent=2))
+                gpu = execute(
+                    runtime, "exec", name, "cat", "/etc/plasma/gpu.json"
+                ).stdout
+                (case / "gpu.json").write_bytes(gpu)
+                gpu = json.loads(gpu)
                 overlay = (
                     backend == "wayland"
                     and execute(
@@ -579,13 +641,6 @@ print(json.dumps(sorted(libraries)))
                             "Compositor mixed overlay Qt with distro Qt libraries"
                         )
                 if args.gpu:
-                    report["hardware_gpu_available"] = any(
-                        device.get("hardware") for device in gpu["devices"]
-                    )
-                    if not report["hardware_gpu_available"]:
-                        raise RuntimeError(
-                            "Requested GPU could not create a hardware EGL context"
-                        )
                     support = subprocess.run(
                         [
                             runtime,
@@ -621,29 +676,7 @@ print(json.dumps(sorted(libraries)))
                         raise RuntimeError(
                             "Overlay compositor did not report KWin 6.8.2 with Qt 6.11.2"
                         )
-                    renderer = re.search(
-                        r"^OpenGL renderer string:\s*(.+)", support, re.MULTILINE
-                    )
-                    report["renderer"] = renderer.group(1) if renderer else None
-                    report["software_fallback"] = (
-                        session["LIBGL_ALWAYS_SOFTWARE"] == "1"
-                    )
-                    report["hardware_rendering"] = bool(renderer) and not any(
-                        token in renderer.group(1).lower()
-                        for token in (
-                            "llvmpipe",
-                            "softpipe",
-                            "software rasterizer",
-                            "lavapipe",
-                        )
-                    )
-                    if (
-                        not report["software_fallback"]
-                        and not report["hardware_rendering"]
-                    ):
-                        raise RuntimeError(
-                            "Compositor did not use the requested hardware renderer"
-                        )
+                    report.update(require_gpu(gpu, session, support))
                 if mode == "headless":
                     report["headless_services"] = headless_services(runtime, name)
                     report["headless_private"] = True
