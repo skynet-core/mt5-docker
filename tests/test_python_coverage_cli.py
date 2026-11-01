@@ -13,6 +13,7 @@ import pwd
 import runpy
 import sys
 import tempfile
+import time
 import types
 import unittest
 from pathlib import Path
@@ -92,9 +93,8 @@ class PythonEntrypointTests(unittest.TestCase):
             self.assertEqual(result["Common"]["Login"], "123")
             self.assertEqual(result["Experts"]["Enabled"], "0")
 
-    def test_mcp_entrypoint_uses_private_environment_and_dispatches_tools_off_the_loop(
-        self,
-    ):
+    def _exec_mcp_program(self, original_fn):
+        """Run the entrypoint with a mocked mt5_mcp module. Returns (server, added tools)."""
         environment = {"DISPLAY": ":777", "WINEPREFIX": "/private/test-prefix"}
         with (
             patch.dict(os.environ, {}, clear=True),
@@ -108,9 +108,6 @@ class PythonEntrypointTests(unittest.TestCase):
         self.assertEqual(arguments[:3], ["wine", r"C:\Python\python.exe", "-c"])
         program = arguments[3]
 
-        def original_query(operation="terminal_info"):
-            return {"success": True, "operation": operation}
-
         class Tool:
             def __init__(self, name, fn):
                 self.name = name
@@ -120,7 +117,7 @@ class PythonEntrypointTests(unittest.TestCase):
                 return SimpleNamespace(name=self.name, **update)
 
         server = SimpleNamespace(
-            get_tool=AsyncMock(side_effect=lambda name: Tool(name, original_query)),
+            get_tool=AsyncMock(side_effect=lambda name: Tool(name, original_fn)),
             local_provider=SimpleNamespace(remove_tool=Mock()),
             add_tool=Mock(),
             run_async=AsyncMock(),
@@ -140,7 +137,21 @@ class PythonEntrypointTests(unittest.TestCase):
         # tool body to the single dedicated worker thread.
         self.assertTrue(all(not tool.run_in_thread for tool in added))
         self.assertTrue(all(inspect.iscoroutinefunction(tool.fn) for tool in added))
+        server.run_async.assert_awaited_once_with(
+            transport="http", host="0.0.0.0", port=8000, path="/mcp"
+        )
+        return server, added
+
+    def test_mcp_entrypoint_uses_private_environment_and_dispatches_tools_off_the_loop(
+        self,
+    ):
+        def original_query(operation="terminal_info"):
+            return {"success": True, "operation": operation}
+
+        _, added = self._exec_mcp_program(original_query)
         wrapper = added[0].fn
+        # The wrapper must not change the tool's parameter schema.
+        self.assertEqual(inspect.signature(wrapper), inspect.signature(original_query))
 
         async def scenario():
             background = asyncio.create_task(wrapper("terminal_info"))
@@ -153,9 +164,38 @@ class PythonEntrypointTests(unittest.TestCase):
         self.assertEqual(first, {"success": True, "operation": "terminal_info"})
         self.assertIsInstance(second, RuntimeError)
         self.assertIn("busy", str(second))
-        server.run_async.assert_awaited_once_with(
-            transport="http", host="0.0.0.0", port=8000, path="/mcp"
-        )
+
+    def test_mcp_entrypoint_blocking_tool_does_not_starve_the_event_loop(self):
+        # Regression: while the terminal is unreachable, MT5 IPC calls block
+        # for minutes. The tool body must run off the loop so the HTTP server
+        # (and the healthcheck handshake) keeps responding meanwhile; the old
+        # inline execution starves the loop and records no heartbeats.
+        def slow_query(operation="terminal_info"):
+            time.sleep(0.3)
+            return "done"
+
+        _, added = self._exec_mcp_program(slow_query)
+        wrapper = added[0].fn
+
+        async def scenario():
+            heartbeats = 0
+
+            async def heartbeat():
+                nonlocal heartbeats
+                while True:
+                    heartbeats += 1
+                    await asyncio.sleep(0.02)
+
+            beat = asyncio.create_task(heartbeat())
+            try:
+                result = await wrapper("terminal_info")
+            finally:
+                beat.cancel()
+            return result, heartbeats
+
+        result, heartbeats = asyncio.run(scenario())
+        self.assertEqual(result, "done")
+        self.assertGreaterEqual(heartbeats, 5)
 
 
 class DockerfileRenderingTests(unittest.TestCase):
