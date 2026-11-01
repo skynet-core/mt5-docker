@@ -262,6 +262,12 @@ class SmokeRunnerTests(unittest.TestCase):
             self.assertEqual(evidence["network"], "none")
             run = calls[0]
             self.assertEqual(run[run.index("--network") + 1], "none")
+            self.assertIn("--entrypoint=/usr/local/bin/mt5-test-init", run)
+            self.assertIn(
+                f"type=bind,source={ROOT / 'tests/isolated-entrypoint.sh'},target=/usr/local/bin/mt5-test-init,readonly",
+                run,
+            )
+            self.assertIn("LIBGL_ALWAYS_SOFTWARE=1", run)
             self.assertIn(
                 "type=bind,source=/dev/null,target=/etc/systemd/system/mt5-mcp.service,readonly",
                 run,

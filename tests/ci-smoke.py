@@ -97,6 +97,9 @@ def main(args):
             "--name",
             container,
             "--no-healthcheck",
+            "--entrypoint=/usr/local/bin/mt5-test-init",
+            "--mount",
+            f"type=bind,source={Path(__file__).with_name('isolated-entrypoint.sh').resolve()},target=/usr/local/bin/mt5-test-init,readonly",
             # An offline import/window smoke must not initialize account IPC.
             "--mount",
             "type=bind,source=/dev/null,target=/etc/systemd/system/mt5-mcp.service,readonly",

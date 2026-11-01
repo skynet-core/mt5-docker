@@ -3,7 +3,19 @@
 set -euo pipefail
 export WINEPREFIX=/home/plasma/.wine WINEDEBUG=-all
 export WINEDLLOVERRIDES='mscoree,mshtml='
-export WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS='--disable-gpu'
+# High-integrity Wine hosts ignore WebView2 environment overrides.
+wine 'C:\Python\python.exe' - <<'BROWSER'
+import winreg
+
+path = r"Software\Policies\Microsoft\Edge\WebView2\AdditionalBrowserArguments"
+with winreg.CreateKeyEx(winreg.HKEY_LOCAL_MACHINE, path, access=winreg.KEY_QUERY_VALUE | winreg.KEY_SET_VALUE) as key:
+    try:
+        arguments, _ = winreg.QueryValueEx(key, "terminal64.exe")
+    except FileNotFoundError:
+        arguments = ""
+    if not arguments:
+        winreg.SetValueEx(key, "terminal64.exe", 0, winreg.REG_SZ, "--disable-gpu")
+BROWSER
 /usr/local/libexec/mt5-dpi
 python3 - <<'PYTHON'
 import json

@@ -135,6 +135,9 @@ module_plasma_run() {
 		printf '{"devices": [], "forced_software": true}\n' >/etc/plasma/gpu.json
 	fi
 	chmod 644 /etc/plasma/gpu.json
+	local render_node nvidia_bus
+	render_node=$(python3 -c 'import json; print((json.load(open("/etc/plasma/gpu.json")).get("selected") or {}).get("device") or "")')
+	nvidia_bus=$(python3 -c 'import json; d=json.load(open("/etc/plasma/gpu.json")).get("selected") or {}; print((d.get("pci_bus_id") or "") if d.get("vendor", "").startswith("NVIDIA") else "")')
 	local nvidia_sync=0
 	if [[ $mode == nested && $backend == wayland ]]; then
 		# File capabilities make the loader ignore the scoped KWin preloads.
@@ -175,7 +178,7 @@ PYTHON
 	fi
 	local desktop_display=:100
 	[[ $host_x11 != :100 ]] || desktop_display=:101
-	local software_display=:110 software_capture=0 software_nested=0
+	local software_display=:110 software_capture=0 software_nested=0 nvidia_nested=0
 	[[ $host_x11 != :110 ]] || software_display=:111
 	if [[ $backend == wayland && $software == 1 && ($mode == headless || $mode == vnc || $mode == web) && ! -f /etc/plasma/opengl-software-capture ]]; then
 		software_capture=1
@@ -183,6 +186,9 @@ PYTHON
 	# KWin 6.8's native X11 backend requires DRI3, unavailable on CPU-only hosts.
 	if [[ $backend == wayland && $software == 1 && $mode == nested && $host_backend == x11 && -f /etc/plasma/opengl-software-capture ]]; then
 		software_nested=1
+	fi
+	if [[ $backend == x11 && $mode == nested && -n $nvidia_bus ]]; then
+		nvidia_nested=1
 	fi
 	rm -f /etc/plasma/Xauthority
 	touch /etc/plasma/Xauthority
@@ -192,9 +198,9 @@ PYTHON
 	chmod 600 /etc/plasma/Xauthority
 
 	rm -f /etc/plasma/vnc-password /etc/plasma/vnc-auth
-	if [[ $mode == vnc || $mode == web || $software_nested == 1 ]]; then
+	if [[ $mode == vnc || $mode == web || $software_nested == 1 || $nvidia_nested == 1 ]]; then
 		local password=${VNC_PASSWORD:-}
-		if [[ $software_nested == 1 ]]; then
+		if [[ $software_nested == 1 || $nvidia_nested == 1 ]]; then
 			password=$(mcookie)
 			password=${password:0:8}
 		elif [[ -n ${VNC_PASSWORD_FILE:-} ]]; then
@@ -256,6 +262,11 @@ PYTHON
 			plasma_write_env QT_QPA_PLATFORM wayland
 		fi
 		plasma_write_env PLASMA_NVIDIA_SYNC "$nvidia_sync"
+		plasma_write_env PLASMA_NVIDIA_BUS_ID "$nvidia_bus"
+		plasma_write_env PLASMA_NVIDIA_NESTED "$nvidia_nested"
+		if [[ -n $render_node ]]; then
+			plasma_write_env KWIN_RENDER_NODES "${KWIN_RENDER_NODES:-$render_node}"
+		fi
 		plasma_write_env CLIPBOARD_SYNC "$clipboard"
 		plasma_write_env LIBGL_ALWAYS_SOFTWARE "$software"
 		if [[ $software == 1 ]]; then
@@ -270,8 +281,9 @@ PYTHON
 	export SYSTEMD_INIT_TARGET="plasma-$backend-$mode.target"
 	# A restarted container may regain a usable GPU after an earlier software boot.
 	rm -f /etc/systemd/system/default.target.wants/plasma-nested-x11.service \
-		/etc/systemd/system/plasma-wayland-nested.target.wants/plasma-nested-x11.service
-	if [[ $software_nested == 1 ]]; then
+		/etc/systemd/system/plasma-wayland-nested.target.wants/plasma-nested-x11.service \
+		/etc/systemd/system/plasma-x11-nested.target.wants/plasma-nested-x11.service
+	if [[ $software_nested == 1 || $nvidia_nested == 1 ]]; then
 		export SYSTEMD_INIT_TARGET_WANTS="${SYSTEMD_INIT_TARGET_WANTS:+$SYSTEMD_INIT_TARGET_WANTS,}plasma-nested-x11.service"
 	fi
 }

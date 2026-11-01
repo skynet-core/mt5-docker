@@ -176,40 +176,75 @@ class ShellToolchainTests(unittest.TestCase):
                 )
                 self.assertEqual(result.returncode, expected)
 
-    def test_arch_x11_build_checks_the_isolated_namespace_and_prunes_development_files(
-        self,
-    ):
+    def test_x11_build_keeps_the_distro_libdir_and_isolated_namespace(self):
         stub = r"""
+pkg-config() { record pkg-config "$@"; printf '%s\n' "$TEST_LIBDIR"; }
 curl() { record curl "$@"; }
-sha256sum() { read -r checksum archive; record checksum "$checksum"; }
+sha256sum() { read -r checksum archive; record checksum "$checksum"; [[ $TEST_FAILURE != checksum ]]; }
 tar() { record tar "$@"; }
 cmake() {
     record cmake "$@"
     if [[ $1 == --install ]]; then
-        mkdir -p "$TEST_ROOT/out/root/usr/bin" "$TEST_ROOT/out/root/usr/lib" "$TEST_ROOT/out/root/usr/include"
+        mkdir -p "$TEST_ROOT/out/root/usr/bin" "$TEST_ROOT/out/root$TEST_LIBDIR/cmake" "$TEST_ROOT/out/root/usr/include"
         printf '#!/bin/bash\n' > "$TEST_ROOT/out/root/usr/bin/kwin_x11"
         chmod +x "$TEST_ROOT/out/root/usr/bin/kwin_x11"
-        : > "$TEST_ROOT/out/root/usr/lib/libkwin-x11.so.6"
+        : > "$TEST_ROOT/out/root$TEST_LIBDIR/libkwin-x11.so.6"
+        : > "$TEST_ROOT/out/root$TEST_LIBDIR/cmake/development.cmake"
         : > "$TEST_ROOT/out/root/usr/include/development.h"
+        if [[ $TEST_FAILURE == binary ]]; then
+            : > "$TEST_ROOT/out/root/usr/bin/kwin_wayland"
+        elif [[ $TEST_FAILURE == library ]]; then
+            : > "$TEST_ROOT/out/root$TEST_LIBDIR/libkwin.so.6"
+        fi
     fi
 }
 """
-        result, commands, _, files = self.run_source(
-            ROOT / "build/arch-kwin-x11",
-            replacements=(
-                ("/tmp/kwin-x11.tar.gz", "archive"),
-                ("/kwin-x11-source", "source-tree"),
-                ("/kwin-x11-build", "build-tree"),
-                ("/out/root", "out/root"),
-            ),
-            before=stub,
-        )
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(commands[1][0], "checksum")
-        self.assertIn("out/root/usr/bin/kwin_x11", files)
-        self.assertIn("out/root/usr/lib/libkwin-x11.so.6", files)
-        self.assertNotIn("out/root/usr/include/development.h", files)
-        self.assertNotIn("out/root/usr/bin/kwin_wayland", files)
+        for libdir, failure in (
+            ("/usr/lib", ""),
+            ("/usr/lib64", ""),
+            ("/usr/lib64", "checksum"),
+            ("/usr/lib64", "binary"),
+            ("/usr/lib64", "library"),
+            ("/unsupported", ""),
+        ):
+            with self.subTest(libdir=libdir, failure=failure):
+                result, commands, _, files = self.run_source(
+                    ROOT / "build/arch-kwin-x11",
+                    replacements=(
+                        ("/tmp/kwin-x11.tar.gz", "archive"),
+                        ("/kwin-x11-source", "source-tree"),
+                        ("/kwin-x11-build", "build-tree"),
+                        ("/out/root", "out/root"),
+                    ),
+                    environment={"TEST_LIBDIR": libdir, "TEST_FAILURE": failure},
+                    before=stub,
+                )
+                self.assertEqual(
+                    result.returncode,
+                    int(bool(failure) or libdir == "/unsupported"),
+                    result.stderr,
+                )
+                self.assertEqual(
+                    commands[0], ["pkg-config", "--variable=libdir", "Qt6Core"]
+                )
+                if libdir == "/unsupported":
+                    self.assertEqual(len(commands), 1)
+                    continue
+                self.assertEqual(commands[2][0], "checksum")
+                if failure == "checksum":
+                    self.assertFalse(
+                        any(row[0] in ("tar", "cmake") for row in commands)
+                    )
+                    continue
+                configure = next(row for row in commands if row[:2] == ["cmake", "-S"])
+                self.assertIn(f"-DCMAKE_INSTALL_LIBDIR={libdir}", configure)
+                self.assertIn("out/root/usr/bin/kwin_x11", files)
+                self.assertIn(f"out/root{libdir}/libkwin-x11.so.6", files)
+                self.assertNotIn("out/root/usr/include/development.h", files)
+                self.assertNotIn(f"out/root{libdir}/cmake/development.cmake", files)
+                if not failure:
+                    self.assertNotIn("out/root/usr/bin/kwin_wayland", files)
+                    self.assertNotIn(f"out/root{libdir}/libkwin.so.6", files)
 
 
 if __name__ == "__main__":

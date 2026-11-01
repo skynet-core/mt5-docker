@@ -1,0 +1,265 @@
+From b7803f74a21bf6a6a7985edd9382d9dda5e7ece4 Mon Sep 17 00:00:00 2001
+From: Alexander Zeijlon <aleze@cendio.se>
+Date: Wed, 29 Apr 2026 21:59:18 +0200
+Subject: [PATCH] Prefer defined digest sizes over magic constants
+
+The code should be easy to understand and work with. Using library
+definitions should improve this a bit.
+
+Backport: retain 1.16.0 fingerprint encoding and pre-zeroing context.
+---
+diff --git a/common/rdr/AESInStream.cxx b/common/rdr/AESInStream.cxx
+--- a/common/rdr/AESInStream.cxx
++++ b/common/rdr/AESInStream.cxx
+@@ -49,29 +49,29 @@
+     return false;
+   const uint8_t* buf = in->getptr(2);
+   size_t length = ((int)buf[0] << 8) | (int)buf[1];
+-  if (!in->hasData(2 + length + 16))
++  if (!in->hasData(2 + length + EAX_DIGEST_SIZE))
+     return false;
+   ensureSpace(length);
+-  buf = in->getptr(2 + length + 16);
++  buf = in->getptr(2 + length + EAX_DIGEST_SIZE);
+   const uint8_t* ad = buf;
+   const uint8_t* data = buf + 2;
+   const uint8_t* mac = buf + 2 + length;
+-  uint8_t macComputed[16];
++  uint8_t macComputed[EAX_DIGEST_SIZE];
+ 
+   if (keySize == 128) {
+     EAX_SET_NONCE(&eaxCtx128, aes128_encrypt, 16, counter);
+     EAX_UPDATE(&eaxCtx128, aes128_encrypt, 2, ad);
+     EAX_DECRYPT(&eaxCtx128, aes128_encrypt, length, (uint8_t*)end, data);
+-    EAX_DIGEST(&eaxCtx128, aes128_encrypt, 16, macComputed);
++    EAX_DIGEST(&eaxCtx128, aes128_encrypt, EAX_DIGEST_SIZE, macComputed);
+   } else {
+     EAX_SET_NONCE(&eaxCtx256, aes256_encrypt, 16, counter);
+     EAX_UPDATE(&eaxCtx256, aes256_encrypt, 2, ad);
+     EAX_DECRYPT(&eaxCtx256, aes256_encrypt, length, (uint8_t*)end, data);
+-    EAX_DIGEST(&eaxCtx256, aes256_encrypt, 16, macComputed);
++    EAX_DIGEST(&eaxCtx256, aes256_encrypt, EAX_DIGEST_SIZE, macComputed);
+   }
+-  if (memcmp(mac, macComputed, 16) != 0)
++  if (memcmp(mac, macComputed, EAX_DIGEST_SIZE) != 0)
+     throw std::runtime_error("AESInStream: Failed to authenticate message");
+-  in->setptr(2 + length + 16);
++  in->setptr(2 + length + EAX_DIGEST_SIZE);
+   end += length;
+ 
+   // Update nonce by incrementing the counter as a
+diff --git a/common/rdr/AESOutStream.cxx b/common/rdr/AESOutStream.cxx
+--- a/common/rdr/AESOutStream.cxx
++++ b/common/rdr/AESOutStream.cxx
+@@ -83,14 +83,14 @@
+     EAX_SET_NONCE(&eaxCtx128, aes128_encrypt, 16, counter);
+     EAX_UPDATE(&eaxCtx128, aes128_encrypt, 2, msg);
+     EAX_ENCRYPT(&eaxCtx128, aes128_encrypt, length, msg + 2, data);
+-    EAX_DIGEST(&eaxCtx128, aes128_encrypt, 16, msg + 2 + length);
++    EAX_DIGEST(&eaxCtx128, aes128_encrypt, EAX_DIGEST_SIZE, msg + 2 + length);
+   } else {
+     EAX_SET_NONCE(&eaxCtx256, aes256_encrypt, 16, counter);
+     EAX_UPDATE(&eaxCtx256, aes256_encrypt, 2, msg);
+     EAX_ENCRYPT(&eaxCtx256, aes256_encrypt, length, msg + 2, data);
+-    EAX_DIGEST(&eaxCtx256, aes256_encrypt, 16, msg + 2 + length);
++    EAX_DIGEST(&eaxCtx256, aes256_encrypt, EAX_DIGEST_SIZE, msg + 2 + length);
+   }
+-  out->writeBytes(msg, 2 + length + 16);
++  out->writeBytes(msg, 2 + length + EAX_DIGEST_SIZE);
+   out->flush();
+ 
+   // Update nonce by incrementing the counter as a
+diff --git a/common/rfb/CSecurityDH.cxx b/common/rfb/CSecurityDH.cxx
+--- a/common/rfb/CSecurityDH.cxx
++++ b/common/rfb/CSecurityDH.cxx
+@@ -121,11 +121,11 @@
+   std::vector<uint8_t> BBytes(keyLength);
+   nettle_mpz_get_str_256(sharedSecret.size(), sharedSecret.data(), k);
+   nettle_mpz_get_str_256(BBytes.size(), BBytes.data(), B);
+-  uint8_t key[16];
++  uint8_t key[MD5_DIGEST_SIZE];
+   struct md5_ctx md5Ctx;
+   md5_init(&md5Ctx);
+   md5_update(&md5Ctx, sharedSecret.size(), sharedSecret.data());
+-  md5_digest(&md5Ctx, 16, key);
++  md5_digest(&md5Ctx, MD5_DIGEST_SIZE, key);
+   struct aes128_ctx aesCtx;
+   aes128_set_encrypt_key(&aesCtx, key);
+ 
+diff --git a/common/rfb/CSecurityRSAAES.cxx b/common/rfb/CSecurityRSAAES.cxx
+--- a/common/rfb/CSecurityRSAAES.cxx
++++ b/common/rfb/CSecurityRSAAES.cxx
+@@ -221,13 +221,13 @@
+     (uint8_t)((serverKeyLength & 0xff00) >> 8),
+     (uint8_t)(serverKeyLength & 0xff)
+   };
+-  uint8_t f[8];
++  uint8_t f[SHA1_DIGEST_SIZE];
+   struct sha1_ctx ctx;
+   sha1_init(&ctx);
+   sha1_update(&ctx, 4, lenServerKey);
+   sha1_update(&ctx, serverKey.size, serverKeyN);
+   sha1_update(&ctx, serverKey.size, serverKeyE);
+-  sha1_digest(&ctx, sizeof(f), f);
++  sha1_digest(&ctx, SHA1_DIGEST_SIZE, f);
+   const char *title = "Server key fingerprint";
+   std::string text = core::format(
+     "The server has provided the following identifying information:\n"
+@@ -299,30 +299,30 @@
+ {
+   rawis = cc->getInStream();
+   rawos = cc->getOutStream();
+-  uint8_t key[32];
++  uint8_t key[SHA256_DIGEST_SIZE];
+   if (keySize == 128) {
+     struct sha1_ctx ctx;
+     sha1_init(&ctx);
+     sha1_update(&ctx, 16, clientRandom);
+     sha1_update(&ctx, 16, serverRandom);
+-    sha1_digest(&ctx, 16, key);
++    sha1_digest(&ctx, SHA1_DIGEST_SIZE, key);
+     rais = new rdr::AESInStream(rawis, key, 128);
+     sha1_init(&ctx);
+     sha1_update(&ctx, 16, serverRandom);
+     sha1_update(&ctx, 16, clientRandom);
+-    sha1_digest(&ctx, 16, key);
++    sha1_digest(&ctx, SHA1_DIGEST_SIZE, key);
+     raos = new rdr::AESOutStream(rawos, key, 128);
+   } else {
+     struct sha256_ctx ctx;
+     sha256_init(&ctx);
+     sha256_update(&ctx, 32, clientRandom);
+     sha256_update(&ctx, 32, serverRandom);
+-    sha256_digest(&ctx, 32, key);
++    sha256_digest(&ctx, SHA256_DIGEST_SIZE, key);
+     rais = new rdr::AESInStream(rawis, key, 256);
+     sha256_init(&ctx);
+     sha256_update(&ctx, 32, serverRandom);
+     sha256_update(&ctx, 32, clientRandom);
+-    sha256_digest(&ctx, 32, key);
++    sha256_digest(&ctx, SHA256_DIGEST_SIZE, key);
+     raos = new rdr::AESOutStream(rawos, key, 256);
+   }
+   if (isAllEncrypted)
+@@ -331,7 +331,7 @@
+ 
+ void CSecurityRSAAES::writeHash()
+ {
+-  uint8_t hash[32];
++  uint8_t hash[SHA256_DIGEST_SIZE];
+   size_t len = serverKeyLength;
+   uint8_t lenServerKey[4] = {
+     (uint8_t)((len & 0xff000000) >> 24),
+@@ -348,7 +348,7 @@
+   };
+   int hashSize;
+   if (keySize == 128) {
+-    hashSize = 20;
++    hashSize = SHA1_DIGEST_SIZE;
+     struct sha1_ctx ctx;
+     sha1_init(&ctx);
+     sha1_update(&ctx, 4, lenClientKey);
+@@ -359,7 +359,7 @@
+     sha1_update(&ctx, serverKey.size, serverKeyE);
+     sha1_digest(&ctx, hashSize, hash);
+   } else {
+-    hashSize = 32;
++    hashSize = SHA256_DIGEST_SIZE;
+     struct sha256_ctx ctx;
+     sha256_init(&ctx);
+     sha256_update(&ctx, 4, lenClientKey);
+@@ -376,9 +376,15 @@
+ 
+ bool CSecurityRSAAES::readHash()
+ {
+-  uint8_t hash[32];
+-  uint8_t realHash[32];
+-  int hashSize = keySize == 128 ? 20 : 32;
++  uint8_t hash[SHA256_DIGEST_SIZE];
++  uint8_t realHash[SHA256_DIGEST_SIZE];
++  int hashSize;
++  if (keySize == 128) {
++    hashSize = SHA1_DIGEST_SIZE;
++  } else {
++    hashSize = SHA256_DIGEST_SIZE;
++  }
++
+   if (!rais->hasData(hashSize))
+     return false;
+   rais->readBytes(hash, hashSize);
+diff --git a/common/rfb/SSecurityRSAAES.cxx b/common/rfb/SSecurityRSAAES.cxx
+--- a/common/rfb/SSecurityRSAAES.cxx
++++ b/common/rfb/SSecurityRSAAES.cxx
+@@ -406,30 +406,30 @@
+ {
+   rawis = sc->getInStream();
+   rawos = sc->getOutStream();
+-  uint8_t key[32];
++  uint8_t key[SHA256_DIGEST_SIZE];
+   if (keySize == 128) {
+     struct sha1_ctx ctx;
+     sha1_init(&ctx);
+     sha1_update(&ctx, 16, serverRandom);
+     sha1_update(&ctx, 16, clientRandom);
+-    sha1_digest(&ctx, 16, key);
++    sha1_digest(&ctx, SHA1_DIGEST_SIZE, key);
+     rais = new rdr::AESInStream(rawis, key, 128);
+     sha1_init(&ctx);
+     sha1_update(&ctx, 16, clientRandom);
+     sha1_update(&ctx, 16, serverRandom);
+-    sha1_digest(&ctx, 16, key);
++    sha1_digest(&ctx, SHA1_DIGEST_SIZE, key);
+     raos = new rdr::AESOutStream(rawos, key, 128);
+   } else {
+     struct sha256_ctx ctx;
+     sha256_init(&ctx);
+     sha256_update(&ctx, 32, serverRandom);
+     sha256_update(&ctx, 32, clientRandom);
+-    sha256_digest(&ctx, 32, key);
++    sha256_digest(&ctx, SHA256_DIGEST_SIZE, key);
+     rais = new rdr::AESInStream(rawis, key, 256);
+     sha256_init(&ctx);
+     sha256_update(&ctx, 32, clientRandom);
+     sha256_update(&ctx, 32, serverRandom);
+-    sha256_digest(&ctx, 32, key);
++    sha256_digest(&ctx, SHA256_DIGEST_SIZE, key);
+     raos = new rdr::AESOutStream(rawos, key, 256);
+   }
+   if (isAllEncrypted)
+@@ -455,7 +455,7 @@
+   };
+   int hashSize;
+   if (keySize == 128) {
+-    hashSize = 20;
++    hashSize = SHA1_DIGEST_SIZE;
+     struct sha1_ctx ctx;
+     sha1_init(&ctx);
+     sha1_update(&ctx, 4, lenServerKey);
+@@ -466,7 +466,7 @@
+     sha1_update(&ctx, clientKey.size, clientKeyE);
+     sha1_digest(&ctx, hashSize, hash);
+   } else {
+-    hashSize = 32;
++    hashSize = SHA256_DIGEST_SIZE;
+     struct sha256_ctx ctx;
+     sha256_init(&ctx);
+     sha256_update(&ctx, 4, lenServerKey);
+@@ -483,9 +483,15 @@
+ 
+ bool SSecurityRSAAES::readHash()
+ {
+-  uint8_t hash[32];
+-  uint8_t realHash[32];
+-  int hashSize = keySize == 128 ? 20 : 32;
++  uint8_t hash[SHA256_DIGEST_SIZE];
++  uint8_t realHash[SHA256_DIGEST_SIZE];
++  int hashSize;
++  if (keySize == 128) {
++    hashSize = SHA1_DIGEST_SIZE;
++  } else {
++    hashSize = SHA256_DIGEST_SIZE;
++  }
++
+   if (!rais->hasData(hashSize))
+     return false;
+   rais->readBytes(hash, hashSize);

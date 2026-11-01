@@ -63,3 +63,11 @@ docker build --target kwin-artifacts -f Dockerfile.debian-13 .
 Each source phase has its own cached stage. The final `mt5` image copies only
 the collected runtime tree; source archives, compilers and build tools stay
 in the builder stages.
+
+Fedora and Arch retain their distribution Wayland compositor and build the
+separate, namespaced KWin-X11 6.7.5 release with `build/arch-kwin-x11`. Arch no
+longer packages X11 KWin, while Fedora's KWin 6.8 conflicts with its older X11
+RPM. The shared builder verifies its pinned archive, derives `/usr/lib` or
+`/usr/lib64` from the distro Qt SDK, and rejects output that replaces Wayland
+KWin or its library. Only runtime artifacts and required runtime packages reach
+the final image. Debian and Ubuntu continue using their packaged X11 compositor.

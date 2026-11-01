@@ -1,5 +1,8 @@
 patch
-tigervnc-viewer
+libfltk1.3-dev
+libpam0g-dev
+libpixman-1-dev
+libxrender-dev
 extra-cmake-modules
 qt6-base-private-dev
 libkf6config-dev

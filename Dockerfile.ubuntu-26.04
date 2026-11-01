@@ -53,7 +53,7 @@ RUN cmake -S /src -B /build -G Ninja -DKRFB_SOURCE_DIR=/krfb-source \
 FROM input-build AS compat-build
 COPY vendor/kde-container/compat/ /src/compat/
 COPY vendor/kde-container/test/egl-fence-stub.cpp vendor/kde-container/test/egl-fence-test.cpp /src/tests/
-RUN c++ -shared -fPIC -O2 /src/compat/xtest-paced.cpp -ldl -o /xtest-paced.so \
+RUN c++ -shared -fPIC -O2 /src/compat/xtest-paced.cpp -lX11 -ldl -o /xtest-paced.so \
     && c++ -shared -fPIC -O2 /src/compat/egl-fence-wait.cpp -ldl -o /egl-fence-wait.so \
     && c++ -shared -fPIC -O2 /src/compat/wayland-pointer-enter.cpp -lwayland-client -ldl -o /wayland-pointer-enter.so \
     && mkdir /fake-egl \
@@ -62,9 +62,15 @@ RUN c++ -shared -fPIC -O2 /src/compat/xtest-paced.cpp -ldl -o /xtest-paced.so \
     && LD_LIBRARY_PATH=/fake-egl python3 -c 'import os, subprocess; [subprocess.run(["/test-egl-fence", "/egl-fence-wait.so"], env={**os.environ, "FAKE_EGL_VENDOR": vendor}, timeout=5, check=True) for vendor in ("NVIDIA", "Mesa")]'
 
 FROM input-source AS vnc-build
+ARG TIGERVNC_VIEWER_VERSION=1.16.0
+ARG TIGERVNC_VIEWER_SHA256=10512fc0254ae3bde41c19d18c15f7ebd8cd476261afe0611c41965d635d46e8
 COPY build/packages/debian/vnc-build.txt /build-support/packages/vnc-build.txt
 RUN /build-support/install-packages vnc-build
 COPY build/collect-artifacts /build-support/collect-artifacts
+COPY build/tigervnc-viewer /build-support/tigervnc-viewer
+COPY vendor/kde-container/patches/tigervnc-pointer-enter.patch /tmp/tigervnc-pointer-enter.patch
+COPY vendor/kde-container/patches/tigervnc-digest-sizes.patch /tmp/tigervnc-digest-sizes.patch
+COPY vendor/kde-container/patches/tigervnc-nettle4.patch /tmp/tigervnc-nettle4.patch
 COPY vendor/kde-container/patches/krfb-low-latency.patch /tmp/krfb-low-latency.patch
 COPY vendor/kde-container/native/framebuffer-geometry.h /krfb-source/krfb/framebuffer-geometry.h
 COPY vendor/kde-container/patches/krfb-existing-output.patch /tmp/krfb-existing-output.patch
@@ -78,9 +84,8 @@ RUN --mount=type=bind,from=desktop-packages,source=/,target=/desktop-baseline,ro
     && cmake -S /krfb-source -B /krfb-build -G Ninja \
         -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF \
     && cmake --build /krfb-build --parallel 2 --target krfb-virtualmonitor krfb_framebuffer_pw \
+    && /build-support/tigervnc-viewer \
     && /build-support/collect-artifacts vnc
-
-# DISTRO_X11_BUILDER
 
 # Build once against Debian's older glibc; the private ABI also runs on Ubuntu.
 FROM ghcr.io/skynet-core/systemd:debian-13 AS kwin-build-dependencies
@@ -139,11 +144,15 @@ COPY --from=input-build /out/root/ /
 COPY --from=vnc-build /out/root/ /
 COPY --from=compat-build /xtest-paced.so /egl-fence-wait.so /wayland-pointer-enter.so /usr/local/lib/plasma6/
 COPY --from=kwin-selected /out/root/ /
-# DISTRO_X11_RUNTIME
-# DISTRO_RUNTIME_CONFIG
 RUN chmod +x /init.d/modules/*.sh /usr/local/bin/* /usr/local/libexec/* \
         /usr/local/libexec/plasma-backend/kwin_wayland \
     && command -v kscreen-doctor \
+    && test -x /usr/bin/kwin_wayland \
+    && test -x /usr/bin/kwin_x11 \
+    && ldd /usr/bin/kwin_x11 >/tmp/kwin-x11.ldd \
+    && ! grep -F 'not found' /tmp/kwin-x11.ldd \
+    && rm /tmp/kwin-x11.ldd \
+    && python3 -c 'import ctypes; ctypes.CDLL("libGLESv2.so.2")' \
     && ldd /usr/bin/vncviewer >/tmp/vncviewer.ldd \
     && ! grep -F 'not found' /tmp/vncviewer.ldd \
     && rm /tmp/vncviewer.ldd \

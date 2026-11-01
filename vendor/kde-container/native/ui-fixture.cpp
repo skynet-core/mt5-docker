@@ -47,7 +47,12 @@ int captureOutput(const QString &destination, bool includeCursor = false) {
                    "Cursor capture requires the Wayland screenshot API\n");
       return 1;
     }
-    image = screen->grabWindow(0).toImage();
+    QSize size = screen->size();
+    // NVIDIA's virtual Xorg root has no RandR monitor, so Qt reports 0x0.
+    if (size.isEmpty())
+      size = QSize(qEnvironmentVariableIntValue("DISPLAY_WIDTH"),
+                   qEnvironmentVariableIntValue("DISPLAY_HEIGHT"));
+    image = screen->grabWindow(0, 0, 0, size.width(), size.height()).toImage();
     method = "x11-root";
   } else {
     QTemporaryFile pixels;

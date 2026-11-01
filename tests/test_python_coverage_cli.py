@@ -144,18 +144,37 @@ class DockerfileRenderingTests(unittest.TestCase):
     def test_all_generated_variants_match_their_committed_dockerfile(self):
         generator = load("build/render-dockerfiles.py")
         template = (ROOT / "Dockerfile.fedora-44").read_text()
+        self.assertEqual(template.count("FROM desktop-packages AS x11-build"), 1)
+        self.assertIn("COPY build/packages/fedora/x11-build.txt", template)
+        self.assertIn("RUN touch /etc/plasma/opengl-software-capture", template)
         for distro, family in generator.DISTROS.items():
             with self.subTest(distro=distro):
                 result = generator.render(template, distro, family)
                 self.assertEqual(result, (ROOT / f"Dockerfile.{distro}").read_text())
                 self.assertNotIn("build/packages/fedora/", result)
+                self.assertIn("test -x /usr/bin/kwin_wayland", result)
+                self.assertIn("test -x /usr/bin/kwin_x11", result)
+                self.assertIn('ctypes.CDLL("libGLESv2.so.2")', result)
                 if family == "ubuntu":
                     self.assertIn("build/packages/debian/input-build.txt", result)
                     self.assertIn("build/packages/ubuntu/desktop.txt", result)
                 if family == "arch":
-                    self.assertIn("FROM desktop-packages AS x11-build", result)
+                    self.assertEqual(
+                        result.count("FROM desktop-packages AS x11-build"), 1
+                    )
+                    self.assertIn("COPY build/packages/arch/x11-build.txt", result)
+                    self.assertIn("COPY --from=x11-build /out/root/ /", result)
+                    self.assertEqual(
+                        result.count("RUN touch /etc/plasma/opengl-software-capture"), 1
+                    )
                     self.assertNotIn("ARG KWIN_VARIANT=", result)
                 else:
+                    self.assertNotIn("AS x11-build", result)
+                    self.assertNotIn("COPY --from=x11-build", result)
+                    self.assertNotIn(f"build/packages/{family}/x11-", result)
+                    self.assertNotIn(
+                        "RUN touch /etc/plasma/opengl-software-capture", result
+                    )
                     self.assertIn("ARG KWIN_VARIANT=source", result)
                     self.assertIn("FROM kwin-${KWIN_VARIANT} AS kwin-selected", result)
 

@@ -6,12 +6,6 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 DISTROS = {"debian-13": "debian", "ubuntu-26.04": "ubuntu", "archlinux": "arch"}
-ARCH_X11_BUILDER = """FROM desktop-packages AS x11-build
-COPY build/packages/arch/x11-build.txt /build-support/packages/x11-build.txt
-COPY build/arch-kwin-x11 /build-support/arch-kwin-x11
-RUN /build-support/install-packages x11-build \\
-    && bash /build-support/arch-kwin-x11
-"""
 APT_KWIN_BUILDER = """# Build once against Debian's older glibc; the private ABI also runs on Ubuntu.
 FROM ghcr.io/skynet-core/systemd:debian-13 AS kwin-build-dependencies
 SHELL ["/bin/bash", "-e", "-u", "-o", "pipefail", "-c"]
@@ -67,9 +61,19 @@ def render(template, distro, family):
     if family == "ubuntu":
         for phase in ("input-build", "vnc-build"):
             content = content.replace(
-                f"build/packages/ubuntu/{phase}.txt", f"build/packages/debian/{phase}.txt"
+                f"build/packages/ubuntu/{phase}.txt",
+                f"build/packages/debian/{phase}.txt",
             )
     if family in ("debian", "ubuntu"):
+        # These distros still package X11; omit Fedora/Arch's source stages.
+        for first, last in (
+            ("# DISTRO_X11_BUILDER", "# DISTRO_KWIN_BUILDER"),
+            ("# DISTRO_X11_RUNTIME", "# DISTRO_RUNTIME_CONFIG"),
+            ("# DISTRO_RUNTIME_CONFIG", "RUN chmod +x"),
+        ):
+            begin = content.index(first)
+            end = content.index(last, begin)
+            content = content[:begin] + content[end:]
         content = content.replace(
             f"ARG BASE_IMAGE=ghcr.io/skynet-core/systemd:{distro}\n",
             f"ARG BASE_IMAGE=ghcr.io/skynet-core/systemd:{distro}\n"
@@ -88,26 +92,9 @@ def render(template, distro, family):
             if family == "debian"
             else "RUN install -d /out/root",
         )
-        content = content.replace(
-            "# DISTRO_KWIN_BUILDER", APT_KWIN_BUILDER + selection
-        )
+        content = content.replace("# DISTRO_KWIN_BUILDER", APT_KWIN_BUILDER + selection)
         content = content.replace(
             "# DISTRO_KWIN_RUNTIME", "COPY --from=kwin-selected /out/root/ /"
-        )
-    if family == "arch":
-        content = content.replace("# DISTRO_X11_BUILDER", ARCH_X11_BUILDER)
-        content = content.replace(
-            "# DISTRO_X11_RUNTIME",
-            "COPY build/packages/arch/x11-runtime.txt /build-support/packages/x11-runtime.txt\n"
-            "RUN /build-support/install-packages x11-runtime\n"
-            "COPY --from=x11-build /out/root/ /\n"
-            "RUN ldd /usr/bin/kwin_x11 >/tmp/kwin-x11.ldd \\\n"
-            "    && ! grep -F 'not found' /tmp/kwin-x11.ldd \\\n"
-            "    && rm /tmp/kwin-x11.ldd",
-        )
-        content = content.replace(
-            "# DISTRO_RUNTIME_CONFIG",
-            "# KWin 6.8 removed QPainter; use software OpenGL for capture.\nRUN touch /etc/plasma/opengl-software-capture",
         )
     return content.replace(
         "# syntax=docker/dockerfile:1\n",

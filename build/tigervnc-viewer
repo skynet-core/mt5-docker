@@ -1,0 +1,24 @@
+#!/usr/bin/bash
+set -euo pipefail
+curl --fail --location --retry 3 \
+	"https://codeload.github.com/TigerVNC/tigervnc/tar.gz/refs/tags/v${TIGERVNC_VIEWER_VERSION:?}" \
+	--output /tmp/tigervnc.tar.gz
+printf '%s  /tmp/tigervnc.tar.gz\n' "${TIGERVNC_VIEWER_SHA256:?}" | sha256sum --check -
+mkdir /tigervnc-source
+tar -xzf /tmp/tigervnc.tar.gz --strip-components=1 -C /tigervnc-source
+patch --batch --fuzz=0 -d /tigervnc-source -p1 </tmp/tigervnc-pointer-enter.patch
+patch --batch --fuzz=0 -d /tigervnc-source -p1 </tmp/tigervnc-digest-sizes.patch
+patch --batch --fuzz=0 -d /tigervnc-source -p1 </tmp/tigervnc-nettle4.patch
+fltk_config=$(command -v fltk-config1.3 || command -v fltk-config)
+# Arch keeps the compatibility libraries outside the default library search path.
+cmake -S /tigervnc-source -B /tigervnc-build -G Ninja \
+	-DCMAKE_BUILD_TYPE=Release -DBUILD_VIEWER=ON -DBUILD_JAVA=OFF \
+	-DENABLE_H264=OFF -DENABLE_NLS=OFF -DFLTK_CONFIG_SCRIPT="$fltk_config" \
+	-DFLTK_INCLUDE_DIR="$("$fltk_config" --includedir)" \
+	-DCMAKE_LIBRARY_PATH=/usr/lib/fltk1.3
+cmake --build /tigervnc-build --parallel 2 --target vncviewer
+dependencies=$(ldd /tigervnc-build/vncviewer/vncviewer)
+[[ $dependencies == *'libfltk.so.1.3 =>'* && $dependencies == *'libfltk_images.so.1.3 =>'* ]]
+install -Dm755 /tigervnc-build/vncviewer/vncviewer /usr/local/bin/vncviewer
+install -Dm644 /tigervnc-source/LICENCE.TXT /out/root/usr/share/licenses/tigervnc-viewer/LICENCE.TXT
+rm /tmp/tigervnc.tar.gz

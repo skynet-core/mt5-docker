@@ -88,7 +88,7 @@ class RuntimeBoundaryTests(unittest.TestCase):
         ):
             output = Path(directory)
             runtime.collect("docker", "private-child", output)
-            for name in ("container.log", "services.log", "units.log"):
+            for name in ("container.log", "services.log", "units.log", "xorg.log"):
                 self.assertEqual((output / name).read_bytes(), b"outerr")
 
     def test_readiness_retries_and_has_a_deadline(self):
@@ -443,7 +443,15 @@ class FixtureMatrixTests(unittest.TestCase):
                 if command[-1] == "/etc/plasma/gpu.json":
                     return result(
                         json.dumps(
-                            {"devices": [{"hardware": failure != "gpu"}]}
+                            {
+                                "devices": [
+                                    {
+                                        "hardware": failure != "gpu",
+                                        "vendor": "NVIDIA Corporation",
+                                        "renderer": "NVIDIA test GPU",
+                                    }
+                                ]
+                            }
                         ).encode()
                     )
                 if "test" in command:
@@ -533,7 +541,7 @@ class FixtureMatrixTests(unittest.TestCase):
             ),
             contextlib.redirect_stdout(io.StringIO()),
         ):
-            if failure not in (None, "allowed-software") or selected == []:
+            if failure is not None or selected == []:
                 with self.assertRaises(SystemExit):
                     runtime.main(arguments)
             else:
@@ -576,7 +584,7 @@ class FixtureMatrixTests(unittest.TestCase):
                     ).is_file()
                 )
 
-    def test_empty_profiles_fail_and_explicit_software_fallback_is_reported(self):
+    def test_empty_profiles_and_gpu_software_fallback_fail(self):
         with tempfile.TemporaryDirectory() as directory:
             saved, _ = self.run_matrix(directory, selected=[])
             self.assertFalse(saved["passed"])
@@ -586,9 +594,8 @@ class FixtureMatrixTests(unittest.TestCase):
                 failure="allowed-software",
                 selected=[("wayland", "vnc", None)],
             )
-            self.assertTrue(saved["passed"])
-            self.assertTrue(saved["cases"][0]["software_fallback"])
-            self.assertFalse(saved["cases"][0]["hardware_rendering"])
+            self.assertFalse(saved["passed"])
+            self.assertIn("software fallback", saved["cases"][0]["error"])
 
     def test_invalid_fixture_is_rejected_before_creating_evidence(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -223,7 +223,7 @@ class GpuProbeTests(unittest.TestCase):
         for devices, status in (
             ([], 1),
             ([{"hardware": False}], 1),
-            ([{"hardware": True}], 0),
+            ([{"device": "/private/gpu", "hardware": True}], 0),
         ):
             with (
                 self.subTest(devices=devices),
@@ -241,6 +241,21 @@ class GpuProbeTests(unittest.TestCase):
                 patch.object(GPU, "requires_software", return_value=required),
             ):
                 self.assertEqual(GPU.main(), 0 if required else 1)
+
+    def test_gpu_selection_prefers_usable_nvidia_and_keeps_device_identity(self):
+        amd = {"device": "/dev/dri/renderD129", "hardware": True, "vendor": "AMD"}
+        nvidia = {"device": "/dev/dri/renderD128", "hardware": True, "vendor": "NVIDIA"}
+        with (
+            patch.object(Path, "glob", return_value=[Path("/sys/card1")]),
+            patch.object(Path, "resolve", return_value=Path("/sys/0000:01:00.0")),
+        ):
+            selected = GPU.select_device([amd, nvidia])
+        self.assertEqual(selected["device"], nvidia["device"])
+        self.assertEqual(selected["card"], "/dev/dri/card1")
+        self.assertEqual(selected["pci_bus_id"], "PCI:1@0:0:0")
+        self.assertNotIn("pci_bus_id", nvidia)
+        self.assertIsNone(GPU.select_device([{"hardware": False}]))
+        self.assertEqual(GPU.select_device([amd])["device"], amd["device"])
 
 
 class RemoteOutputTests(unittest.TestCase):

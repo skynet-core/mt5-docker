@@ -1,5 +1,5 @@
-# Append to a generated Dockerfile, whose input-source and uv stages are reused.
-FROM input-source AS native-coverage
+# Append to a generated Dockerfile, whose vnc-build and uv stages are reused.
+FROM vnc-build AS native-coverage
 SHELL ["/bin/bash", "-e", "-u", "-o", "pipefail", "-c"]
 WORKDIR /source
 COPY vendor/kde-container/ /source/vendor/kde-container/
@@ -8,8 +8,14 @@ COPY build/lint.py /source/build/lint.py
 COPY pyproject.toml uv.lock /source/
 RUN --mount=type=bind,from=uv,source=/uv,target=/usr/local/bin/uv \
     uv sync --locked --only-group native --python 3.12 \
+    && printf '\ninclude(/source/tests/native/tigervnc-enter.cmake)\n' >> /tigervnc-source/vncviewer/CMakeLists.txt \
+    && cmake -S /tigervnc-source -B /tigervnc-build -G Ninja \
+    && cmake --build /tigervnc-build --parallel 2 --target viewport-enter viewer-crypto \
+    && printf '\ninclude(/source/tests/native/krfb-frame-unit.cmake)\n' >> /krfb-source/framebuffers/pipewire/CMakeLists.txt \
+    && cmake -S /krfb-source -B /krfb-build -G Ninja \
+    && cmake --build /krfb-build --parallel 2 --target krfb-frame-unit \
     && cmake -S tests/native -B /native-build -G Ninja \
         -DCMAKE_BUILD_TYPE=Debug -DKRFB_SOURCE_DIR=/krfb-source \
     && cmake --build /native-build --parallel 2
-ENTRYPOINT ["/source/.venv/bin/python", "/source/tests/native/run_coverage.py"]
+ENTRYPOINT ["xvfb-run", "--auto-servernum", "--server-args=-screen 0 800x600x24 -nolisten tcp", "sh", "-c", "export NATIVE_TEST_DISPLAY=\"$DISPLAY\"; exec /source/.venv/bin/python /source/tests/native/run_coverage.py"]
 CMD []

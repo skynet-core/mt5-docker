@@ -1,6 +1,9 @@
 #!/usr/bin/bash
 set -euo pipefail
 extra=()
+if [[ ${PLASMA_NVIDIA_NESTED:-0} == 1 ]]; then
+	extra+=(-localhost)
+fi
 if [[ $DISPLAY_BACKEND == wayland && ${PLASMA_SOFTWARE_CAPTURE:-0} != 1 ]]; then
 	export PLASMA_KWIN_INPUT=1
 	# Virtualmonitor requires no interactive portal approval.
@@ -17,8 +20,9 @@ if [[ ${PLASMA_SOFTWARE_CAPTURE:-0} == 1 ]]; then
 	# Preserve actual Shift/Ctrl transitions for KWin's nested input backend.
 	# XKB modifier-state rewrites do not generate the key events it consumes.
 	extra+=(-nomodtweak -noxkb)
-	export LD_PRELOAD=/usr/local/lib/plasma6/xtest-paced.so
 fi
+# Calibration processes RFB input outside x11vnc's normal X11 flush loop.
+export LD_PRELOAD="/usr/local/lib/plasma6/xtest-paced.so${LD_PRELOAD:+:$LD_PRELOAD}"
 exec /usr/bin/x11vnc -display "$DISPLAY" -auth "$XAUTHORITY" \
 	-rfbauth /etc/plasma/vnc-auth -rfbport 5900 -forever -shared -noxdamage \
 	-wait "$(((1000 + VNC_MAX_FPS - 1) / VNC_MAX_FPS))" -defer 0 "${extra[@]}"

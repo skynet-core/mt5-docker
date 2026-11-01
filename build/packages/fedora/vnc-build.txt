@@ -1,5 +1,8 @@
 patch
-tigervnc
+fltk1.3-devel
+pam-devel
+pixman-devel
+libXrender-devel
 extra-cmake-modules
 qt6-qtbase-private-devel
 kf6-kconfig-devel

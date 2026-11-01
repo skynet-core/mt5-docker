@@ -1,5 +1,8 @@
 patch
-tigervnc
+fltk1.3
+pam
+pixman
+libxrender
 extra-cmake-modules
 qt6-tools
 qt6-wayland

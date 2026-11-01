@@ -1,4 +1,5 @@
 winehq-devel=11.20~resolute-1
+wine-devel=11.20~resolute-1
 fonts-wine
 libgnutls30t64
 unzip

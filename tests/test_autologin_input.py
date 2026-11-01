@@ -70,6 +70,28 @@ class ChartInputTests(unittest.TestCase):
                             mt5_input.chart_target(image, (203, 41, 97), scale), bounds
                         )
 
+    def test_text_color_speckles_do_not_expand_target_bounds(self):
+        for _, color, _ in mt5_input.CHART_TARGETS:
+            with self.subTest(color=color):
+                image = Image.new("RGB", (1200, 800), "white")
+                draw = ImageDraw.Draw(image)
+                draw.rectangle((865, 463, 984, 506), fill=color)
+                draw.point((144, 684), fill=tuple(value - 1 for value in color))
+                draw.rectangle((50, 20, 51, 21), fill=color)
+                self.assertEqual(
+                    mt5_input.chart_target(image, color), (865, 463, 985, 507)
+                )
+                draw.rectangle((865, 463, 984, 506), fill="white")
+                with self.assertRaisesRegex(RuntimeError, "absent"):
+                    mt5_input.chart_target(image, color)
+
+    def test_separate_full_size_targets_are_ambiguous(self):
+        image = self.image()
+        color = mt5_input.CHART_TARGETS[0][1]
+        ImageDraw.Draw(image).rectangle((10, 10, 129, 53), fill=color)
+        with self.assertRaisesRegex(RuntimeError, "absent"):
+            mt5_input.chart_target(image, color)
+
     def test_compiler_uses_disposable_offline_unprivileged_prefix_and_verifies_outputs(
         self,
     ):

@@ -15,6 +15,94 @@ ROOT = Path(__file__).resolve().parents[1]
 class ShellBuildTests(unittest.TestCase):
     run_source = runtime_tests.ShellRuntimeTests.run_source
 
+    def test_viewer_source_is_verified_before_patch_build_and_install(self):
+        def setup(root):
+            for name in ("enter.patch", "digests.patch", "nettle.patch"):
+                (root / name).write_text("patch")
+
+        for failure, compatibility in (
+            ("", False),
+            ("", True),
+            ("checksum", False),
+            ("patch", False),
+            ("abi", True),
+        ):
+            with self.subTest(failure=failure):
+                result, commands, _, _ = self.run_source(
+                    ROOT / "build/tigervnc-viewer",
+                    setup=setup,
+                    environment={
+                        "TIGERVNC_VIEWER_VERSION": "1.16.0",
+                        "TIGERVNC_VIEWER_SHA256": "a" * 64,
+                        "TEST_FAILURE": failure,
+                        "TEST_FLTK_COMPAT": str(int(compatibility)),
+                    },
+                    replacements=(
+                        ("/tmp/tigervnc.tar.gz", "archive.tar.gz"),
+                        ("/tmp/tigervnc-pointer-enter.patch", "enter.patch"),
+                        ("/tmp/tigervnc-digest-sizes.patch", "digests.patch"),
+                        ("/tmp/tigervnc-nettle4.patch", "nettle.patch"),
+                        ("/tigervnc-source", "tiger-src"),
+                        ("/tigervnc-build", "tiger-build"),
+                        ("/usr/local/bin/vncviewer", "viewer"),
+                        ("/out/root", "out"),
+                    ),
+                    before=(
+                        'curl() { record download "$@"; printf archive > "${@: -1}"; }\n'
+                        'sha256sum() { read -r hash archive; record verify "$hash" "$archive"; [[ $TEST_FAILURE != checksum ]]; }\n'
+                        'tar() { record extract "$@"; }\n'
+                        'patch() { record patch "$@"; [[ $TEST_FAILURE != patch ]]; }\n'
+                        'cmake() { record cmake "$@"; }\n'
+                        'install() { record install "$@"; }\n'
+                        'ldd() { record abi "$@"; if [[ $TEST_FAILURE == abi ]]; then printf "libfltk.so.1.4 => /wrong/libfltk.so.1.4\\n"; else printf "libfltk.so.1.3 => /correct/libfltk.so.1.3\\nlibfltk_images.so.1.3 => /correct/libfltk_images.so.1.3\\n"; fi; }\n'
+                        "fltk-config() { [[ $1 == --includedir ]]; printf /private/fltk/include; }\n"
+                        'fltk-config1.3() { fltk-config "$@"; }\n'
+                        'command() { if [[ $* == "-v fltk-config1.3" ]]; then [[ $TEST_FLTK_COMPAT == 1 ]] && printf fltk-config1.3; elif [[ $* == "-v fltk-config" ]]; then printf fltk-config; else builtin command "$@"; fi; }\n'
+                    ),
+                )
+                self.assertEqual(result.returncode, int(bool(failure)), result.stderr)
+                self.assertIn("/refs/tags/v1.16.0", commands[0][-3])
+                self.assertEqual(commands[1][0:2], ["verify", "a" * 64])
+                actions = [command[0] for command in commands]
+                if failure == "checksum":
+                    self.assertEqual(actions, ["download", "verify"])
+                elif failure == "patch":
+                    self.assertNotIn("cmake", actions)
+                    self.assertNotIn("install", actions)
+                elif failure == "abi":
+                    self.assertEqual(actions[-1], "abi")
+                    self.assertNotIn("install", actions)
+                else:
+                    self.assertEqual(
+                        actions,
+                        [
+                            "download",
+                            "verify",
+                            "extract",
+                            "patch",
+                            "patch",
+                            "patch",
+                            "cmake",
+                            "cmake",
+                            "abi",
+                            "install",
+                            "install",
+                        ],
+                    )
+                    for command in commands[3:6]:
+                        self.assertIn("--fuzz=0", command)
+                    self.assertIn(
+                        "-DFLTK_CONFIG_SCRIPT="
+                        + ("fltk-config1.3" if compatibility else "fltk-config"),
+                        commands[6],
+                    )
+                    self.assertIn(
+                        "-DFLTK_INCLUDE_DIR=/private/fltk/include", commands[6]
+                    )
+                    self.assertIn("-DCMAKE_LIBRARY_PATH=/usr/lib/fltk1.3", commands[6])
+                    self.assertEqual(commands[7][-2:], ["--target", "vncviewer"])
+                    self.assertTrue(commands[-1][-1].endswith("/LICENCE.TXT"))
+
     def test_package_managers_receive_exact_filtered_lists_and_no_weak_dependencies(
         self,
     ):

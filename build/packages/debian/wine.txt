@@ -1,4 +1,7 @@
 winehq-devel=11.20~trixie-1
+wine-devel=11.20~trixie-1
+wine-devel-amd64=11.20~trixie-1
+wine-devel-i386:i386=11.20~trixie-1
 fonts-wine
 libgnutls30t64
 libgnutls30t64:i386

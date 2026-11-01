@@ -1,14 +1,15 @@
 kf6-kservice
 kwin
-kwin-x11
 libkscreen
 google-noto-sans-fonts
 mesa-dri-drivers
 mesa-libEGL
 mesa-libGL
+libglvnd-gles
 mesa-libgbm
 qt6-qtwayland
 xorg-x11-server-Xwayland
+xorg-x11-server-Xorg
 xorg-x11-server-Xephyr
 xorg-x11-server-Xvfb
 xdpyinfo
