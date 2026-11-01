@@ -4,17 +4,41 @@ import os
 
 with open("/run/plasma/mt5-environment.json") as stream:
     os.environ.update(json.load(stream))
-# Upstream CLI ignores rate limits and registers MT5's thread-bound tools as workers.
+# Upstream CLI ignores rate limits, and the validated mt5-mcp==0.6.3/SDK
+# combination runs MT5's thread-bound IPC tools inline on the event loop:
+# one blocking call (e.g. initialize() retrying for minutes while the
+# terminal is unreachable) starves the whole HTTP server. Keep the tools
+# on a single thread — the IPC session binds to exactly one thread — but
+# off the loop, with concurrent calls failing fast instead of queueing.
 program = """
 import asyncio
+import functools
+from concurrent.futures import ThreadPoolExecutor
 from mt5_mcp.mcp_server import create_mcp_server
 
 async def serve():
     server = create_mcp_server(rate_limit_per_minute=0)
+    worker = ThreadPoolExecutor(max_workers=1, thread_name_prefix='mt5-tool')
+    busy = False
     for name in ('mt5_query', 'mt5_analyze', 'mt5_execute'):
         tool = await server.get_tool(name)
+        original = tool.fn
+
+        @functools.wraps(original)
+        async def wrapper(*args, _original=original, **kwargs):
+            nonlocal busy
+            if busy:
+                raise RuntimeError('MT5 tools are busy; retry shortly')
+            busy = True
+            try:
+                return await asyncio.get_running_loop().run_in_executor(
+                    worker, lambda: _original(*args, **kwargs)
+                )
+            finally:
+                busy = False
+
         server.local_provider.remove_tool(name)
-        server.add_tool(tool.model_copy(update={'run_in_thread': False}))
+        server.add_tool(tool.model_copy(update={'fn': wrapper, 'run_in_thread': False}))
     await server.run_async(transport='http', host='0.0.0.0', port=8000, path='/mcp')
 
 asyncio.run(serve())
