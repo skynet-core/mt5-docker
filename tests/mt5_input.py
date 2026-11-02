@@ -157,6 +157,7 @@ def autologin_input(runtime, container, client, probe, output, target_scale=1):
         raise RuntimeError("Autologin regression must start without a native dialog")
     deadline = time.monotonic() + 30
     attempts = []
+    previous_targets = []
     while True:
         ready = any(
             row["event"] == "READY" for row in chart_events(runtime, container, output)
@@ -172,20 +173,26 @@ def autologin_input(runtime, container, client, probe, output, target_scale=1):
             ]
         except RuntimeError as error:
             reason = str(error)
+        # A partially painted frame can shift the detected target center.
+        stable = ready and bool(targets) and targets == previous_targets
+        if ready and targets:
+            reason = "ChartInput target bounds have not stabilized"
         attempts.append(
             {
                 "capture": capture,
                 "ready": ready,
                 "targets_visible": bool(targets),
-                "reason": None if ready and targets else reason,
+                "targets_stable": stable,
+                "reason": None if stable else reason,
             }
         )
         (output / "startup-attempts.json").write_text(
             json.dumps(attempts, indent=2) + "\n"
         )
-        if ready and targets:
+        if stable:
             image.save(output / "startup.png")
             break
+        previous_targets = targets if ready else []
         if time.monotonic() >= deadline:
             raise RuntimeError(
                 "ChartInput did not initialize visibly without a native dialog: "

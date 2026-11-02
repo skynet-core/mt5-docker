@@ -319,6 +319,7 @@ class ChartInputTests(unittest.TestCase):
                 self.image().resize((1600, 1200), Image.Resampling.NEAREST),
                 self.image().resize((1600, 1200), Image.Resampling.NEAREST),
                 self.image().resize((1600, 1200), Image.Resampling.NEAREST),
+                self.image().resize((1600, 1200), Image.Resampling.NEAREST),
             ]
             probe = Mock()
             probe.state.return_value = {"main": 10, "main_enabled": True, "dialogs": []}
@@ -338,7 +339,7 @@ class ChartInputTests(unittest.TestCase):
 
             def click(*_point):
                 self.assertEqual(
-                    client.screenshot.call_count, 2 + client.click.call_count - 1
+                    client.screenshot.call_count, 3 + client.click.call_count - 1
                 )
 
             client.click.side_effect = click
@@ -346,7 +347,13 @@ class ChartInputTests(unittest.TestCase):
                 patch.object(
                     mt5_input,
                     "chart_events",
-                    side_effect=[ready, ready, [*ready, red], [*ready, red, blue]],
+                    side_effect=[
+                        ready,
+                        ready,
+                        ready,
+                        [*ready, red],
+                        [*ready, red, blue],
+                    ],
                 ),
                 patch.object(mt5_input.time, "sleep"),
             ):
@@ -361,7 +368,81 @@ class ChartInputTests(unittest.TestCase):
             attempts = json.loads((output / "startup-attempts.json").read_text())
             self.assertFalse(attempts[0]["targets_visible"])
             self.assertTrue(attempts[1]["targets_visible"])
+            self.assertFalse(attempts[1]["targets_stable"])
+            self.assertTrue(attempts[2]["targets_stable"])
             self.assertTrue((output / attempts[0]["capture"]).is_file())
+
+    def test_first_click_requires_consecutive_ready_target_bounds(self):
+        full = Image.new("RGB", (1400, 800), "white")
+        draw = ImageDraw.Draw(full)
+        for x, (_, color, _) in zip((866, 1036), mt5_input.CHART_TARGETS, strict=True):
+            draw.rectangle((x, 499, x + 119, 542), fill=color)
+        partial = full.copy()
+        # The CI startup frame retained one old scanline through both targets.
+        ImageDraw.Draw(partial).line((866, 501, 1155, 501), fill="white")
+        blank = Image.new("RGB", full.size, "white")
+        for name, frames, ready in (
+            ("partial", [partial, full, full], [True, True, True]),
+            ("absent", [full, blank, full, full], [True] * 4),
+            ("not-ready", [full] * 4, [True, False, True, True]),
+            ("changing", [partial, full, partial, full, full], [True] * 5),
+            ("persistent-partial", [partial, partial], [True, True]),
+        ):
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
+                output = Path(directory)
+                client, probe = Mock(), Mock()
+                client.screenshot.side_effect = [*frames, full, full]
+                probe.state.return_value = {
+                    "main": 10,
+                    "main_enabled": True,
+                    "dialogs": [],
+                }
+
+                def events(*_args, ready=ready, client=client):
+                    if not ready[min(client.screenshot.call_count, len(ready) - 1)]:
+                        return []
+                    return [{"event": "READY"}] + [
+                        {
+                            "event": "OBJECT_CLICK",
+                            "name": mt5_input.CHART_TARGETS[index][0],
+                            "x": str(clicked.args[0] - 825),
+                            "y": str(clicked.args[1] - 458),
+                        }
+                        for index, clicked in enumerate(client.click.call_args_list)
+                    ]
+
+                def click(*_point, client=client, frames=frames):
+                    self.assertEqual(
+                        client.screenshot.call_count,
+                        len(frames) + client.click.call_count - 1,
+                    )
+
+                client.click.side_effect = click
+                with (
+                    patch.object(mt5_input, "chart_events", side_effect=events),
+                    patch.object(mt5_input.time, "sleep"),
+                ):
+                    if name == "persistent-partial":
+                        with self.assertRaisesRegex(RuntimeError, "disagrees"):
+                            mt5_input.autologin_input(
+                                "docker", "private", client, probe, output
+                            )
+                        client.click.assert_called_once_with(926, 522)
+                        evidence = json.loads((output / "chart-input.json").read_text())
+                        self.assertEqual(evidence[0]["observed"], [101, 64])
+                        self.assertFalse(evidence[0]["passed"])
+                    else:
+                        self.assertTrue(
+                            mt5_input.autologin_input(
+                                "docker", "private", client, probe, output
+                            )["passed"]
+                        )
+                        self.assertEqual(
+                            client.click.call_args_list,
+                            [call(926, 521), call(1096, 521)],
+                        )
+                attempts = json.loads((output / "startup-attempts.json").read_text())
+                self.assertEqual(len(attempts), len(frames))
 
     def test_autologin_main_compiles_once_before_children_and_uses_existing_matrix(
         self,
