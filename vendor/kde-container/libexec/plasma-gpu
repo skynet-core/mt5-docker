@@ -5,6 +5,7 @@ import ctypes
 import json
 import os
 import platform
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -19,21 +20,23 @@ SOFTWARE_RENDERERS = (
 )
 
 
-def requires_software(backend, mode):
+def requires_software(backend, mode, selected):
     """KWin 6.3's NVIDIA virtual-output path crashes during remote capture."""
-    if backend != "wayland" or mode not in ("vnc", "web"):
+    if (
+        backend != "wayland"
+        or mode not in ("vnc", "web")
+        or not selected
+        or not selected.get("hardware")
+        or not selected.get("vendor", "").startswith("NVIDIA")
+    ):
         return False
-    if Path("/opt/kwin-6.8.2/bin/kwin_wayland").is_file():
+    if (
+        os.environ.get("TARGET_APP")
+        and Path("/opt/kwin-6.8.2/bin/kwin_wayland").is_file()
+    ):
         return False
     release = platform.freedesktop_os_release()
-    return (
-        release.get("ID") == "debian"
-        and release.get("VERSION_ID") == "13"
-        and any(
-            vendor.read_text().strip() == "0x10de"
-            for vendor in Path("/sys/class/drm").glob("renderD*/device/vendor")
-        )
-    )
+    return release.get("ID") == "debian" and release.get("VERSION_ID") == "13"
 
 
 def probe(device):
@@ -165,9 +168,38 @@ def detect():
     return devices
 
 
+def select_device(devices):
+    usable = [device for device in devices if device.get("hardware")]
+    if not usable:
+        return None
+    selected = next(
+        (device for device in usable if device.get("vendor", "").startswith("NVIDIA")),
+        usable[0],
+    ).copy()
+    directory = Path("/sys/class/drm") / Path(selected["device"]).name / "device"
+    cards = sorted(directory.glob("drm/card[0-9]*"))
+    selected["card"] = f"/dev/dri/{cards[0].name}" if cards else None
+    match = re.fullmatch(
+        r"([0-9a-f]{4}):([0-9a-f]{2}):([0-9a-f]{2})\.([0-7])", directory.resolve().name
+    )
+    selected["pci_bus_id"] = (
+        f"PCI:{int(match[2], 16)}@{int(match[1], 16)}:{int(match[3], 16)}:{int(match[4])}"
+        if match
+        else None
+    )
+    return selected
+
+
 def main():
     if len(sys.argv) == 4 and sys.argv[1] == "--requires-software":
-        return 0 if requires_software(sys.argv[2], sys.argv[3]) else 1
+        try:
+            selected = json.load(sys.stdin)["selected"]
+            if selected is not None and not isinstance(selected, dict):
+                raise ValueError("selected GPU must be an object or null")
+        except (KeyError, TypeError, ValueError) as error:
+            print(f"Invalid GPU probe report: {error}", file=sys.stderr)
+            return 2
+        return 0 if requires_software(sys.argv[2], sys.argv[3], selected) else 1
     if len(sys.argv) == 2:
         try:
             result = probe(sys.argv[1])
@@ -176,7 +208,9 @@ def main():
         print(json.dumps(result))
         return 0
     devices = detect()
-    print(json.dumps({"devices": devices}, indent=2))
+    print(
+        json.dumps({"devices": devices, "selected": select_device(devices)}, indent=2)
+    )
     return 0 if any(device.get("hardware") for device in devices) else 1
 
 

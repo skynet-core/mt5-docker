@@ -42,7 +42,11 @@ then builds the production image and runs:
    chart-local click coordinates and object names through MT5's `OnChartEvent`.
    The expert compiles once in a separate disposable, network-disabled container
    before test sessions start. Production images contain no test expert or compiler
-   dependency. Publishing therefore requires 58 profiles per distribution.
+   dependency.
+6. Ten Market profiles per image cover both display backends and every mode and
+   host transport. They check WebView2 painting when opened, resized and reopened,
+   with retained native and transport screenshots. Publishing therefore requires
+   68 profiles per distribution.
 
 Before image jobs, the source job requires at least **94% executable-line coverage
 for every application, runtime and build Python, Bash and C++ source**, including

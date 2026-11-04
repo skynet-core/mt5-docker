@@ -13,7 +13,6 @@ import pwd
 import runpy
 import sys
 import tempfile
-import time
 import types
 import unittest
 from pathlib import Path
@@ -93,8 +92,7 @@ class PythonEntrypointTests(unittest.TestCase):
             self.assertEqual(result["Common"]["Login"], "123")
             self.assertEqual(result["Experts"]["Enabled"], "0")
 
-    def _exec_mcp_program(self, original_fn):
-        """Run the entrypoint with a mocked mt5_mcp module. Returns (server, added tools)."""
+    def _exec_mcp_program(self, scenario):
         environment = {"DISPLAY": ":777", "WINEPREFIX": "/private/test-prefix"}
         with (
             patch.dict(os.environ, {}, clear=True),
@@ -108,114 +106,174 @@ class PythonEntrypointTests(unittest.TestCase):
         self.assertEqual(arguments[:3], ["wine", r"C:\Python\python.exe", "-c"])
         program = arguments[3]
 
+        def original(operation="terminal_info", ctx=None):
+            pass
+
         class Tool:
-            def __init__(self, name, fn):
-                self.name = name
-                self.fn = fn
+            fn = staticmethod(original)
 
             def model_copy(self, *, update):
-                return SimpleNamespace(name=self.name, **update)
+                return SimpleNamespace(**update)
 
         server = SimpleNamespace(
-            get_tool=AsyncMock(side_effect=lambda name: Tool(name, original_fn)),
+            get_tool=AsyncMock(side_effect=lambda _name: Tool()),
             local_provider=SimpleNamespace(remove_tool=Mock()),
             add_tool=Mock(),
-            run_async=AsyncMock(),
         )
+        async def run_async(**_kwargs):
+            await scenario(server)
+
+        server.run_async = AsyncMock(side_effect=run_async)
         factory = Mock(return_value=server)
         module = types.ModuleType("mt5_mcp.mcp_server")
         module.create_mcp_server = factory
-        with patch.dict(sys.modules, {"mt5_mcp.mcp_server": module}):
-            exec(compile(program, "<mt5-mcp-program>", "exec"), {})
+        with tempfile.TemporaryDirectory() as directory:
+            package = Path(directory) / "mt5_mcp"
+            package.mkdir()
+            (package / "__init__.py").touch()
+            (package / "mcp_tools.py").write_text(
+                "import ctypes, os, threading, time\n"
+                "def mt5_query(operation='terminal_info'):\n"
+                "    if operation == 'hold': time.sleep(0.6)\n"
+                "    if operation == 'native_hold': ctypes.PyDLL(None).sleep(1)\n"
+                "    if operation == 'crash': os._exit(17)\n"
+                "    if operation == 'fail': raise ValueError('synthetic failure')\n"
+                "    if operation == 'large': return {'text': 'ü' * 150000}\n"
+                "    print('tool output does not corrupt the protocol', flush=True)\n"
+                "    return {'operation': operation, 'pid': os.getpid(), 'thread': threading.get_ident()}\n"
+                "mt5_analyze = mt5_query\n"
+                "mt5_execute = mt5_query\n"
+            )
+            with (
+                patch.dict(sys.modules, {"mt5_mcp.mcp_server": module}),
+                patch.dict(os.environ, {"PYTHONPATH": directory}),
+            ):
+                exec(compile(program, "<mt5-mcp-program>", "exec"), {})
         factory.assert_called_once_with(rate_limit_per_minute=0)
         self.assertEqual(
             [call.args[0] for call in server.local_provider.remove_tool.call_args_list],
             ["mt5_query", "mt5_analyze", "mt5_execute"],
         )
         added = [call.args[0] for call in server.add_tool.call_args_list]
-        # The wrappers are async: they run on the loop but push the blocking
-        # tool body to the single dedicated worker thread.
         self.assertTrue(all(not tool.run_in_thread for tool in added))
         self.assertTrue(all(inspect.iscoroutinefunction(tool.fn) for tool in added))
+        self.assertEqual(inspect.signature(added[0].fn), inspect.signature(original))
         server.run_async.assert_awaited_once_with(
             transport="http", host="0.0.0.0", port=8000, path="/mcp"
         )
-        return server, added
 
-    def test_mcp_entrypoint_uses_private_environment_and_dispatches_tools_off_the_loop(
-        self,
-    ):
-        def original_query(operation="terminal_info"):
-            return {"success": True, "operation": operation}
+    def test_mcp_worker_process_preserves_thread_affinity_and_recovers_from_errors(self):
+        async def scenario(server):
+            tools = [call.args[0].fn for call in server.add_tool.call_args_list]
+            results = [await tool(operation="ok", ctx=object()) for tool in tools]
+            self.assertEqual(len({result["pid"] for result in results}), 1)
+            self.assertNotEqual(results[0]["pid"], os.getpid())
+            self.assertEqual(len({result["thread"] for result in results}), 1)
+            self.assertEqual((await tools[0]("large"))["text"], "ü" * 150000)
+            with self.assertRaisesRegex(RuntimeError, "synthetic failure"):
+                await tools[0]("fail")
+            self.assertEqual((await tools[0]("recovered"))["operation"], "recovered")
+            with self.assertRaisesRegex(RuntimeError, "worker process exited"):
+                await tools[0]("crash")
+            self.assertNotEqual((await tools[0]("restarted"))["pid"], results[0]["pid"])
 
-        _, added = self._exec_mcp_program(original_query)
-        wrapper = added[0].fn
-        # The wrapper must not change the tool's parameter schema.
-        self.assertEqual(inspect.signature(wrapper), inspect.signature(original_query))
+        self._exec_mcp_program(scenario)
 
-        async def scenario():
-            background = asyncio.create_task(wrapper("terminal_info"))
-            await asyncio.sleep(0)  # let the background wrapper claim the worker
-            return await asyncio.gather(
-                background, wrapper("terminal_info"), return_exceptions=True
-            )
+    def test_mcp_cancelled_request_stays_busy_until_the_worker_finishes(self):
+        async def scenario(server):
+            tools = [call.args[0].fn for call in server.add_tool.call_args_list]
+            first = asyncio.create_task(tools[0]("hold"))
+            await asyncio.sleep(0.1)
+            first.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await first
+            for tool in tools:
+                with self.assertRaisesRegex(RuntimeError, "busy"):
+                    await tool("another")
+            await asyncio.sleep(0.8)
+            self.assertEqual((await tools[0]("recovered"))["operation"], "recovered")
 
-        first, second = asyncio.run(scenario())
-        self.assertEqual(first, {"success": True, "operation": "terminal_info"})
-        self.assertIsInstance(second, RuntimeError)
-        self.assertIn("busy", str(second))
+        self._exec_mcp_program(scenario)
 
-    def test_mcp_entrypoint_blocking_tool_does_not_starve_the_event_loop(self):
-        # Regression: while the terminal is unreachable, MT5 IPC calls block
-        # for minutes. The tool body must run off the loop so the HTTP server
-        # (and the healthcheck handshake) keeps responding meanwhile; the old
-        # inline execution starves the loop and records no heartbeats.
-        def slow_query(operation="terminal_info"):
-            time.sleep(0.3)
-            return "done"
+    def test_mcp_native_call_holding_interpreter_lock_does_not_starve_event_loop(self):
+        async def scenario(server):
+            tool = server.add_tool.call_args_list[0].args[0].fn
+            task = asyncio.create_task(tool("native_hold"))
+            beats = 0
+            while not task.done():
+                beats += 1
+                await asyncio.sleep(0.02)
+            self.assertEqual((await task)["operation"], "native_hold")
+            self.assertGreaterEqual(beats, 10)
 
-        _, added = self._exec_mcp_program(slow_query)
-        wrapper = added[0].fn
-
-        async def scenario():
-            heartbeats = 0
-
-            async def heartbeat():
-                nonlocal heartbeats
-                while True:
-                    heartbeats += 1
-                    await asyncio.sleep(0.02)
-
-            beat = asyncio.create_task(heartbeat())
-            try:
-                result = await wrapper("terminal_info")
-            finally:
-                beat.cancel()
-            return result, heartbeats
-
-        result, heartbeats = asyncio.run(scenario())
-        self.assertEqual(result, "done")
-        self.assertGreaterEqual(heartbeats, 5)
+        self._exec_mcp_program(scenario)
 
 
 class DockerfileRenderingTests(unittest.TestCase):
     def test_all_generated_variants_match_their_committed_dockerfile(self):
         generator = load("build/render-dockerfiles.py")
         template = (ROOT / "Dockerfile.fedora-44").read_text()
+        self.assertEqual(template.count("FROM desktop-packages AS x11-build"), 1)
+        self.assertIn("COPY build/packages/fedora/x11-build.txt", template)
+        self.assertIn("RUN touch /etc/plasma/opengl-software-capture", template)
         for distro, family in generator.DISTROS.items():
             with self.subTest(distro=distro):
                 result = generator.render(template, distro, family)
                 self.assertEqual(result, (ROOT / f"Dockerfile.{distro}").read_text())
                 self.assertNotIn("build/packages/fedora/", result)
+                self.assertIn("test -x /usr/bin/kwin_wayland", result)
+                self.assertIn("test -x /usr/bin/kwin_x11", result)
+                self.assertIn('ctypes.CDLL("libGLESv2.so.2")', result)
                 if family == "ubuntu":
                     self.assertIn("build/packages/debian/input-build.txt", result)
                     self.assertIn("build/packages/ubuntu/desktop.txt", result)
                 if family == "arch":
-                    self.assertIn("FROM desktop-packages AS x11-build", result)
+                    self.assertEqual(
+                        result.count("FROM desktop-packages AS x11-build"), 1
+                    )
+                    self.assertIn("COPY build/packages/arch/x11-build.txt", result)
+                    self.assertIn("COPY --from=x11-build /out/root/ /", result)
+                    self.assertEqual(
+                        result.count("RUN touch /etc/plasma/opengl-software-capture"), 1
+                    )
                     self.assertNotIn("ARG KWIN_VARIANT=", result)
                 else:
+                    self.assertNotIn("AS x11-build", result)
+                    self.assertNotIn("COPY --from=x11-build", result)
+                    self.assertNotIn(f"build/packages/{family}/x11-", result)
+                    self.assertNotIn(
+                        "RUN touch /etc/plasma/opengl-software-capture", result
+                    )
                     self.assertIn("ARG KWIN_VARIANT=source", result)
                     self.assertIn("FROM kwin-${KWIN_VARIANT} AS kwin-selected", result)
+
+        for recipe in (
+            template,
+            *(generator.render(template, d, f) for d, f in generator.DISTROS.items()),
+        ):
+            self.assertIn("ARG XWAYLAND_FRONTEND_VERSION=24.1.14", recipe)
+            self.assertIn(
+                "ARG XWAYLAND_FRONTEND_SHA256=4eb6b98d678299a4b96138d886345b294130695760345ef84596225a8224078a",
+                recipe,
+            )
+            self.assertIn(
+                "COPY build/tigervnc-viewer build/xwayland-frontend /build-support/",
+                recipe,
+            )
+            self.assertIn(
+                "COPY vendor/kde-container/patches/xwayland-pointer-precision.patch vendor/kde-container/patches/xwayland-rootful-ready.patch /tmp/",
+                recipe,
+            )
+            self.assertIn(
+                "COPY vendor/kde-container/test/xwayland-pointer-unit.c vendor/kde-container/test/xwayland-pointer-unit.py vendor/kde-container/test/xwayland-rootful-ready-unit.c /build-support/",
+                recipe,
+            )
+            self.assertLess(
+                recipe.index("&& /build-support/xwayland-frontend"),
+                recipe.index("&& /build-support/collect-artifacts vnc"),
+            )
+            self.assertIn("COPY --from=vnc-build /out/root/ /", recipe)
+            self.assertIn("ldd /usr/local/libexec/plasma-xwayland", recipe)
 
     def test_check_reports_missing_or_stale_files_without_rewriting(self):
         generator = load("build/render-dockerfiles.py")
@@ -268,7 +326,14 @@ class LintEntrypointTests(unittest.TestCase):
 
         with (
             patch.object(
-                lint, "sources", return_value={"shell": [], "python": [], "c++": []}
+                lint,
+                "sources",
+                return_value={
+                    "shell": ["./a.sh"],
+                    "python": ["./b.py"],
+                    "c": ["./d.c"],
+                    "c++": ["./c.cpp"],
+                },
             ),
             patch.object(lint.subprocess, "run", side_effect=invoke),
             contextlib.redirect_stdout(io.StringIO()) as output,
@@ -277,6 +342,7 @@ class LintEntrypointTests(unittest.TestCase):
         self.assertIn("run uv sync --locked", output.getvalue())
         self.assertTrue(any(command[0] == "shellcheck" for command in visited))
         self.assertTrue(any(command[0] == "cppcheck" for command in visited))
+        self.assertTrue(any("--language=c" in command for command in visited))
 
     def test_unknown_shebang_is_not_classified_as_python_or_shell(self):
         lint = load("build/lint.py")

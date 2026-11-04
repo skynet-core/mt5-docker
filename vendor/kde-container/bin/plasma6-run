@@ -18,7 +18,9 @@ args=(run --rm --name "${CONTAINER_NAME:-plasma6}" --user=0:0 --privileged --cgr
 	-e "DISPLAY_WIDTH=${DISPLAY_WIDTH:-1920}" -e "DISPLAY_HEIGHT=${DISPLAY_HEIGHT:-1080}")
 args+=(-e "VNC_MAX_FPS=${VNC_MAX_FPS:-60}")
 args+=(-e "CLIPBOARD_SYNC=${CLIPBOARD_SYNC:-1}")
-if [[ -n ${TARGET_APP:-} ]]; then args+=(-e "TARGET_APP=$TARGET_APP"); fi
+if [[ -n ${TARGET_APP:-} ]]; then
+	args+=(-e "TARGET_APP=$TARGET_APP" -e "TARGET_APP_WINDOW_MODE=${TARGET_APP_WINDOW_MODE:-fullscreen}")
+fi
 if [[ -n ${PLASMA_PASSWORD_FILE:-} ]]; then
 	plasma_password_file=$(realpath -- "$PLASMA_PASSWORD_FILE")
 	args+=(--mount "type=bind,source=$plasma_password_file,target=/run/secrets/plasma-password,readonly"
@@ -53,57 +55,54 @@ if [[ $mode == nested ]]; then
 	if [[ $engine == docker ]]; then
 		args+=(--userns=host)
 	fi
-	wayland_socket=${WAYLAND_DISPLAY:-}
-	if [[ -n $wayland_socket && $wayland_socket != /* ]]; then
-		wayland_socket=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/$wayland_socket
-	fi
-	if [[ -z $wayland_socket ]]; then
-		for candidate in "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"/wayland-*; do
-			if [[ -S $candidate ]]; then
-				wayland_socket=$candidate
-				break
-			fi
-		done
-	fi
-	if [[ $host_backend == wayland && ! -S $wayland_socket ]]; then
-		printf 'HOST_DISPLAY_BACKEND=wayland requires a host Wayland socket\n' >&2
-		exit 1
-	fi
-	if [[ $host_backend != x11 && -S $wayland_socket ]]; then
-		args+=(--mount "type=bind,source=$wayland_socket,target=/run/host/wayland,readonly"
-			-e HOST_WAYLAND_DISPLAY=/run/host/wayland)
-		if [[ $engine == docker && $backend != x11 ]]; then
-			# NVIDIA Wayland buffers need the matching driver libraries, not just devices.
-			auto_gpu=1
-			for option in "$@"; do
-				case $option in
-				--gpus | --gpus=* | --runtime | --runtime=* | *nvidia.com/gpu=* | \
-					LIBGL_ALWAYS_SOFTWARE=1 | --env=LIBGL_ALWAYS_SOFTWARE=1 | -eLIBGL_ALWAYS_SOFTWARE=1)
-					auto_gpu=0
-					;;
-				LIBGL_ALWAYS_SOFTWARE | --env=LIBGL_ALWAYS_SOFTWARE | -eLIBGL_ALWAYS_SOFTWARE)
-					[[ ${LIBGL_ALWAYS_SOFTWARE:-0} != 1 ]] || auto_gpu=0
+	# Explicit display mounts describe a private parent; never mix in host sockets.
+	caller_display=0
+	previous=''
+	for option in "$@"; do
+		if [[ $previous == --mount || $option == --mount=* ]]; then
+			mount=${option#--mount=}
+			if [[ ,$mount, == *,type=bind,* ]]; then
+				case ,$mount, in
+				*,target=/run/host/wayland,* | *,destination=/run/host/wayland,* | *,dst=/run/host/wayland,* | \
+					*,target=/run/host/X11,* | *,destination=/run/host/X11,* | *,dst=/run/host/X11,*)
+					caller_display=1
 					;;
 				esac
-			done
-			# Docker's template variables must remain literal.
-			# shellcheck disable=SC2016
-			if [[ $auto_gpu == 1 ]] && test -d /sys/module/nvidia &&
-				gpu_runtime=$("$runtime" info --format '{{range $name, $_ := .Runtimes}}{{if eq $name "nvidia"}}nvidia{{end}}{{end}}' 2>/dev/null) &&
-				[[ $gpu_runtime == nvidia ]]; then
-				args+=(--gpus all)
 			fi
 		fi
-	fi
-	if [[ ( $host_backend != wayland || ${CLIPBOARD_SYNC:-1} == 1 ) && -d /tmp/.X11-unix ]]; then
-		args+=(--mount 'type=bind,source=/tmp/.X11-unix,target=/run/host/X11,readonly')
-		if [[ -n ${DISPLAY:-} ]]; then args+=(-e "HOST_DISPLAY=$DISPLAY"); fi
-		if [[ -n ${XAUTHORITY:-} && -f $XAUTHORITY ]]; then
-			args+=(--mount "type=bind,source=$XAUTHORITY,target=/run/host/Xauthority,readonly"
-				-e HOST_XAUTHORITY=/run/host/Xauthority)
-		elif [[ -f ${HOME}/.Xauthority ]]; then
-			args+=(--mount "type=bind,source=${HOME}/.Xauthority,target=/run/host/Xauthority,readonly"
-				-e HOST_XAUTHORITY=/run/host/Xauthority)
+		previous=$option
+	done
+	if [[ $caller_display == 0 ]]; then
+		wayland_socket=${WAYLAND_DISPLAY:-}
+		if [[ -n $wayland_socket && $wayland_socket != /* ]]; then
+			wayland_socket=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/$wayland_socket
+		fi
+		if [[ -z $wayland_socket ]]; then
+			for candidate in "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"/wayland-*; do
+				if [[ -S $candidate ]]; then
+					wayland_socket=$candidate
+					break
+				fi
+			done
+		fi
+		if [[ $host_backend == wayland && ! -S $wayland_socket ]]; then
+			printf 'HOST_DISPLAY_BACKEND=wayland requires a host Wayland socket\n' >&2
+			exit 1
+		fi
+		if [[ $host_backend != x11 && -S $wayland_socket ]]; then
+			args+=(--mount "type=bind,source=$wayland_socket,target=/run/host/wayland,readonly"
+				-e HOST_WAYLAND_DISPLAY=/run/host/wayland)
+		fi
+		if [[ ( $host_backend != wayland || ${CLIPBOARD_SYNC:-1} == 1 ) && -d /tmp/.X11-unix ]]; then
+			args+=(--mount 'type=bind,source=/tmp/.X11-unix,target=/run/host/X11,readonly')
+			if [[ -n ${DISPLAY:-} ]]; then args+=(-e "HOST_DISPLAY=$DISPLAY"); fi
+			if [[ -n ${XAUTHORITY:-} && -f $XAUTHORITY ]]; then
+				args+=(--mount "type=bind,source=$XAUTHORITY,target=/run/host/Xauthority,readonly"
+					-e HOST_XAUTHORITY=/run/host/Xauthority)
+			elif [[ -f ${HOME}/.Xauthority ]]; then
+				args+=(--mount "type=bind,source=${HOME}/.Xauthority,target=/run/host/Xauthority,readonly"
+					-e HOST_XAUTHORITY=/run/host/Xauthority)
+			fi
 		fi
 	fi
 fi
@@ -122,5 +121,27 @@ if [[ $mode == vnc || $mode == web ]]; then
 	if [[ $mode == web ]]; then container_port=6080 port=${WEB_PORT:-6080}; fi
 	[[ $port != 0 ]] || port=''
 	args+=(-p "${BIND_ADDRESS:-127.0.0.1}:$port:$container_port")
+fi
+if [[ $engine == docker ]]; then
+	# NVIDIA rendering needs the matching driver libraries, not just devices.
+	auto_gpu=1
+	for option in "$@"; do
+		case $option in
+		--gpus | --gpus=* | --runtime | --runtime=* | *nvidia.com/gpu=* | \
+			LIBGL_ALWAYS_SOFTWARE=1 | --env=LIBGL_ALWAYS_SOFTWARE=1 | -eLIBGL_ALWAYS_SOFTWARE=1)
+			auto_gpu=0
+			;;
+		LIBGL_ALWAYS_SOFTWARE | --env=LIBGL_ALWAYS_SOFTWARE | -eLIBGL_ALWAYS_SOFTWARE)
+			[[ ${LIBGL_ALWAYS_SOFTWARE:-0} != 1 ]] || auto_gpu=0
+			;;
+		esac
+	done
+	# Docker's template variables must remain literal.
+	# shellcheck disable=SC2016
+	if [[ $auto_gpu == 1 ]] && test -d /sys/module/nvidia &&
+		gpu_runtime=$("$runtime" info --format '{{range $name, $_ := .Runtimes}}{{if eq $name "nvidia"}}nvidia{{end}}{{end}}' 2>/dev/null) &&
+		[[ $gpu_runtime == nvidia ]]; then
+		args+=(--gpus all)
+	fi
 fi
 exec "$runtime" "${args[@]}" "$@" "$image"

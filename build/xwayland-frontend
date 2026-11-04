@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+set -euo pipefail
+curl --fail --location --retry 3 \
+	"https://xorg.freedesktop.org/archive/individual/xserver/xwayland-${XWAYLAND_FRONTEND_VERSION:?}.tar.xz" \
+	--output /tmp/xwayland.tar.xz
+printf '%s  /tmp/xwayland.tar.xz\n' "${XWAYLAND_FRONTEND_SHA256:?}" | sha256sum --check -
+mkdir /xwayland-source
+tar -xJf /tmp/xwayland.tar.xz --strip-components=1 -C /xwayland-source
+patch --batch --fuzz=0 -d /xwayland-source -p1 </tmp/xwayland-pointer-precision.patch
+patch --batch --fuzz=0 -d /xwayland-source -p1 </tmp/xwayland-rootful-ready.patch
+# Presentation uses SHM; keep the guest's distro Xwayland and GPU stack separate.
+meson setup /xwayland-build /xwayland-source --prefix=/usr --buildtype=release \
+	-Dglamor=false -Dglx=false -Ddri3=false -Ddrm=false -Dxvfb=false \
+	-Dlibdecor=true -Dxwayland_ei=false -Dxdmcp=false -Dsecure-rpc=false -Dxselinux=false \
+	-Ddocs=false -Ddevel-docs=false -Ddocs-pdf=false \
+	-Dxkb_dir=/usr/share/X11/xkb -Dxkb_bin_dir=/usr/bin
+meson compile -C /xwayland-build -j 2
+python3 /build-support/xwayland-pointer-unit.py --source /xwayland-source \
+	--build /xwayland-build --output /xwayland-build/pointer-unit
+python3 /build-support/xwayland-pointer-unit.py --unit rootful-ready \
+	--source /xwayland-source --build /xwayland-build \
+	--output /xwayland-build/rootful-ready-unit
+install -Dm755 /xwayland-build/hw/xwayland/Xwayland /out/root/usr/local/libexec/plasma-xwayland
+install -Dm644 /xwayland-source/COPYING /out/root/usr/share/licenses/plasma-xwayland/COPYING
+rm /tmp/xwayland.tar.xz

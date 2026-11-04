@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
-#pragma once
+#ifndef PLASMA_FRAMEBUFFER_GEOMETRY_H
+#define PLASMA_FRAMEBUFFER_GEOMETRY_H
 
 #include <QCoreApplication>
 #include <QSize>
@@ -13,3 +14,5 @@ inline QVariant current() {
   return QCoreApplication::instance()->property("plasmaFramebufferSize");
 }
 } // namespace PlasmaFramebuffer
+
+#endif

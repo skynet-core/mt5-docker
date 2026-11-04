@@ -20,6 +20,7 @@
 #include <qlogging.h>
 #include <qtenvironmentvariables.h>
 #include <qtmetamacros.h>
+#include <qtypes.h>
 #if __has_include(<qguiapplication_platform.h>)
 #include <qguiapplication_platform.h>
 #endif

@@ -1,0 +1,577 @@
+{
+  "repository": "skynet-core/kde-container",
+  "commit": "fb35001552fdb77c3be1b2981df06ebbf9d67fdc",
+  "pull_request": "https://github.com/skynet-core/kde-container/pull/5",
+  "files": [
+    {
+      "path": "build/arch-kwin-x11",
+      "upstream_path": "build/arch-kwin-x11",
+      "sha256": "8d7995cdd4cfaa0669f2f79199c0e89725f6118f7d68776b38f07926ae3dae0c",
+      "mode": "100755"
+    },
+    {
+      "path": "build/collect-artifacts",
+      "upstream_path": "build/collect-artifacts",
+      "sha256": "7ffbd6fa21036d9cda70a9b0db92432533880db74a4812f1c0e94bb8b334546a",
+      "mode": "100755"
+    },
+    {
+      "path": "build/create-user",
+      "upstream_path": "build/create-user",
+      "sha256": "09f41219887f7489c5c04aa9816e509295060ba503e1df0923d8700041735c8d",
+      "mode": "100644"
+    },
+    {
+      "path": "build/kwin-6.8.2",
+      "upstream_path": "build/kwin-6.8.2",
+      "sha256": "5034290dcaa83702ebf4df4534f82e555734769240b9dd300001d4d7d934999e",
+      "mode": "100755"
+    },
+    {
+      "path": "build/kwin-6.8.2-sources.tsv",
+      "upstream_path": "build/kwin-6.8.2-sources.tsv",
+      "sha256": "0952e14ae39364c78df42392e4a491de25b35b817ab4d2e898f85261ac725173",
+      "mode": "100644"
+    },
+    {
+      "path": "build/kwin-client-sources.tsv",
+      "upstream_path": "build/kwin-client-sources.tsv",
+      "sha256": "dadca9529384ce026fd311bd5c9283af069eecf0e41723ab4a2a4134a46e2547",
+      "mode": "100644"
+    },
+    {
+      "path": "build/kwin-phases/collect.sh",
+      "upstream_path": "build/kwin-phases/collect.sh",
+      "sha256": "eaada25af6ca716b6c6f05097179f9f4071307e069de65ddbf01fb2efdcf9ad1",
+      "mode": "100644"
+    },
+    {
+      "path": "build/kwin-phases/frameworks.sh",
+      "upstream_path": "build/kwin-phases/frameworks.sh",
+      "sha256": "c1bac797a430b0e9610bf9efdd015d5245e6138b846caeec1d98fa9d04b47ef5",
+      "mode": "100644"
+    },
+    {
+      "path": "build/kwin-phases/kwin.sh",
+      "upstream_path": "build/kwin-phases/kwin.sh",
+      "sha256": "152f7f82fcb99289e449eb51563b1e4346a1ef35587e9ee27b12f262da18317c",
+      "mode": "100644"
+    },
+    {
+      "path": "build/kwin-phases/platform.sh",
+      "upstream_path": "build/kwin-phases/platform.sh",
+      "sha256": "4e47954d4026cd1b610d27b43c26d439f69ff8df077177d670507c726736991f",
+      "mode": "100644"
+    },
+    {
+      "path": "build/kwin-phases/qtbase.sh",
+      "upstream_path": "build/kwin-phases/qtbase.sh",
+      "sha256": "37568091bb68b94be75a81a5884a080177207cd5358b5d7e0b2af15fc784db54",
+      "mode": "100644"
+    },
+    {
+      "path": "build/kwin-phases/qtdeclarative.sh",
+      "upstream_path": "build/kwin-phases/qtdeclarative.sh",
+      "sha256": "ed269becc66264b5b0ca67a0b9874832dac1e5c433522807980a5fd9ea9a8063",
+      "mode": "100644"
+    },
+    {
+      "path": "build/kwin-phases/qtmodules.sh",
+      "upstream_path": "build/kwin-phases/qtmodules.sh",
+      "sha256": "7646bd7b36c0b6f5e02fd2712ee471c7787dd7e379a72afc0851bfdf82144613",
+      "mode": "100644"
+    },
+    {
+      "path": "build/kwin-vulkan-sources.tsv",
+      "upstream_path": "build/kwin-vulkan-sources.tsv",
+      "sha256": "7c771f93e10691d89c32c83a71a5c28a77e2f2b36c28c452487177d62f758577",
+      "mode": "100644"
+    },
+    {
+      "path": "build/normalize-runtime",
+      "upstream_path": "build/normalize-runtime",
+      "sha256": "cf2329c41211e0c31de812d5d95857f58731ac4b9d781f2f5002e319b14c2d7b",
+      "mode": "100644"
+    },
+    {
+      "path": "build/packages/arch/input-build.txt",
+      "upstream_path": "build/packages/arch/input-build.txt",
+      "sha256": "05d98c22797eef365fe9f7cbb3ebe43c58665dbe504c63554b712879f467260f",
+      "mode": "100644"
+    },
+    {
+      "path": "build/packages/arch/vnc-build.txt",
+      "upstream_path": "build/packages/arch/vnc-build.txt",
+      "sha256": "1d0d28a63ff73c4ae00a8378785f26a0aaa042d00846f087b7e41b0adce18037",
+      "mode": "100644"
+    },
+    {
+      "path": "build/packages/arch/x11-build.txt",
+      "upstream_path": "build/packages/arch/x11-build.txt",
+      "sha256": "a2237f01144357bc8dd711ae3e905bf321393f4c85b974d8ea4460189d52cc1c",
+      "mode": "100644"
+    },
+    {
+      "path": "build/packages/arch/x11-runtime.txt",
+      "upstream_path": "build/packages/arch/x11-runtime.txt",
+      "sha256": "d21aa6a20ed3a34ccba90ba7a8ca4295e4874521a59cf2a0974eb3dcab5f6ee2",
+      "mode": "100644"
+    },
+    {
+      "path": "build/packages/debian/input-build.txt",
+      "upstream_path": "build/packages/debian/input-build.txt",
+      "sha256": "e8ac3ba8b6744ee46a9165480260d33f9262deb163f9f9feabe5dc433e0221ef",
+      "mode": "100644"
+    },
+    {
+      "path": "build/packages/debian/kwin-build.txt",
+      "upstream_path": "build/packages/debian/kwin-build.txt",
+      "sha256": "25b6716c04f37a445b47687d3d008a0385a51294fa33bff30a5f86ceb031ac8e",
+      "mode": "100644"
+    },
+    {
+      "path": "build/packages/debian/kwin-final-build.txt",
+      "upstream_path": "build/packages/debian/kwin-final-build.txt",
+      "sha256": "da73c88660a058164ad6cd3fd8827ef45ab0a55439ca5c384c35c77617767886",
+      "mode": "100644"
+    },
+    {
+      "path": "build/packages/debian/vnc-build.txt",
+      "upstream_path": "build/packages/debian/vnc-build.txt",
+      "sha256": "bf4b22d54a33b389943979bce88b1d5495fd1fcd1f44f94c3eb398c54af9e007",
+      "mode": "100644"
+    },
+    {
+      "path": "build/packages/fedora/input-build.txt",
+      "upstream_path": "build/packages/fedora/input-build.txt",
+      "sha256": "9023af782dd8d8c98a6e725dc159c236a5805670ec000df163e9920af1de9586",
+      "mode": "100644"
+    },
+    {
+      "path": "build/packages/fedora/vnc-build.txt",
+      "upstream_path": "build/packages/fedora/vnc-build.txt",
+      "sha256": "eb56947f5bb5b15327cb852d1082e8a6ea7df23da3f26fb565d6b6f934bcfe4d",
+      "mode": "100644"
+    },
+    {
+      "path": "build/packages/fedora/x11-build.txt",
+      "upstream_path": "build/packages/fedora/x11-build.txt",
+      "sha256": "58d3fc4d6f795ee79ab2291e4a16e50efa512a6a343713d32e72f04aaaa80e9e",
+      "mode": "100644"
+    },
+    {
+      "path": "build/packages/fedora/x11-runtime.txt",
+      "upstream_path": "build/packages/fedora/x11-runtime.txt",
+      "sha256": "643e2096a05d250cea14acbac3a3924665a25c9e3bdd9f889ce7ecb405d60558",
+      "mode": "100644"
+    },
+    {
+      "path": "build/tigervnc-viewer",
+      "upstream_path": "build/tigervnc-viewer",
+      "sha256": "9104d257d798db3296f115f92da3f0e4e532e1e064b618761ce457f862cfdbc3",
+      "mode": "100755"
+    },
+    {
+      "path": "build/websockify-requirements.txt",
+      "upstream_path": "build/websockify-requirements.txt",
+      "sha256": "b063d1812dfdb8a5069a3ad60986fdd5fab730fc5e9f711f960f13b14a852cf6",
+      "mode": "100644"
+    },
+    {
+      "path": "tests/rfb.py",
+      "upstream_path": "test/rfb.py",
+      "sha256": "717638288bbe24bcd08bda2987b63edcc52b1bf1a258340cfc926ac28d808413",
+      "mode": "100644"
+    },
+    {
+      "path": "vendor/kde-container/bin/plasma-healthcheck",
+      "upstream_path": "bin/plasma-healthcheck",
+      "sha256": "9830509b8fefffa5b507b045f6fb264220f7ed0b62c9fcd194b4df3c9d2231ad",
+      "mode": "100755"
+    },
+    {
+      "path": "vendor/kde-container/bin/plasma6-run",
+      "upstream_path": "bin/plasma6-run",
+      "sha256": "d08678404eb962b86ae3b12d0f4fe9b75168f2f3680626a3d3b7d5e5a317208a",
+      "mode": "100755"
+    },
+    {
+      "path": "vendor/kde-container/compat/egl-fence-wait.cpp",
+      "upstream_path": "compat/egl-fence-wait.cpp",
+      "sha256": "88d71e1cc9b19f5369ced4f67680341bcf0afb735f9cf351d2ad4d147e9dc473",
+      "mode": "100644"
+    },
+    {
+      "path": "vendor/kde-container/compat/wayland-pointer-enter.cpp",
+      "upstream_path": "compat/wayland-pointer-enter.cpp",
+      "sha256": "7e280c33928e532fd24697b372881872a7cf68a037a443b0c41ab29dfd45b9be",
+      "mode": "100644"
+    },
+    {
+      "path": "vendor/kde-container/compat/xtest-paced.cpp",
+      "upstream_path": "compat/xtest-paced.cpp",
+      "sha256": "335ff24c22b4d2b34c246f0f0f31771466c726014c0aa6b88ee7f5f21654a3e8",
+      "mode": "100644"
+    },
+    {
+      "path": "vendor/kde-container/config/kscreenlockerrc",
+      "upstream_path": "config/kscreenlockerrc",
+      "sha256": "efc39c3791bcfa5ba7a1aeaa6843bc3320c81dc1b80d71bfc0b36e2a3f0dee4d",
+      "mode": "100644"
+    },
+    {
+      "path": "vendor/kde-container/config/ksplashrc",
+      "upstream_path": "config/ksplashrc",
+      "sha256": "fe02d91f60d05640b9b44dd185eb5a89fc7394a5c3aa456f639cbf89b4c3747b",
+      "mode": "100644"
+    },
+    {
+      "path": "vendor/kde-container/config/startkderc",
+      "upstream_path": "config/startkderc",
+      "sha256": "a6a10ce97fb2fdcb2ac995efa72bef77e7bb836ce6d6c0fbd5e1cfa7cb4efb51",
+      "mode": "100644"
+    },
+    {
+      "path": "vendor/kde-container/init.d/modules/300-plasma-user.sh",
+      "upstream_path": "init.d/modules/300-plasma-user.sh",
+      "sha256": "822d475b0671ce11d11e7436d6cafc03570f1190bcbff5537754db328a646e24",
+      "mode": "100644"
+    },
+    {
+      "path": "vendor/kde-container/init.d/modules/400-plasma.sh",
+      "upstream_path": "init.d/modules/400-plasma.sh",
+      "sha256": "8f268144ea410a4f0a6e47070dac62bf1c23a1f36609d61029a7ad1686abe771",
+      "mode": "100755"
+    },
+    {
+      "path": "vendor/kde-container/libexec/plasma-backend/kwin_wayland",
+      "upstream_path": "libexec/plasma-backend/kwin_wayland",
+      "sha256": "8e541434654000a8839991dae609799ad325f2b61edd6d3f0c306e6e154f8411",
+      "mode": "100755"
+    },
+    {
+      "path": "vendor/kde-container/libexec/plasma-gpu",
+      "upstream_path": "libexec/plasma-gpu",
+      "sha256": "f1abaf3cdeb09c011fd9e43f5992ebf22a39dc9283201e9e9e19f80a34e40334",
+      "mode": "100755"
+    },
+    {
+      "path": "vendor/kde-container/libexec/plasma-host-display",
+      "upstream_path": "libexec/plasma-host-display",
+      "sha256": "4797c6d880e43702cfe0c1bfe6bf4f4e433bb00522a6efafdd8ba0fde6e7e1b3",
+      "mode": "100755"
+    },
+    {
+      "path": "vendor/kde-container/libexec/plasma-nested-x11",
+      "upstream_path": "libexec/plasma-nested-x11",
+      "sha256": "2594a876a60daf6af7da6b36348212f3c429de4e2998a338844726d32d651da7",
+      "mode": "100755"
+    },
+    {
+      "path": "vendor/kde-container/libexec/plasma-remote-output",
+      "upstream_path": "libexec/plasma-remote-output",
+      "sha256": "0cbbf53e013ef938a1bd410bbbda14b5f88c5a3d0e175517c3d97eebf82f695c",
+      "mode": "100755"
+    },
+    {
+      "path": "vendor/kde-container/libexec/plasma-session",
+      "upstream_path": "libexec/plasma-session",
+      "sha256": "a7566ba6a63c426ba6d49282e33a566aa48c2a96fb218dcb00c7d072ecc72291",
+      "mode": "100755"
+    },
+    {
+      "path": "vendor/kde-container/libexec/plasma-software-display",
+      "upstream_path": "libexec/plasma-software-display",
+      "sha256": "c6c3e0d52c125f1b321c62cb3e58bdb55dcb5a8e0c2330e4a4118c93714213fb",
+      "mode": "100644"
+    },
+    {
+      "path": "vendor/kde-container/libexec/plasma-target-app",
+      "upstream_path": "libexec/plasma-target-app",
+      "sha256": "f3fd27bf8588ae4058484c967210b14674b6038e63a623a322d1fc2e9daf307f",
+      "mode": "100755"
+    },
+    {
+      "path": "vendor/kde-container/libexec/plasma-vnc",
+      "upstream_path": "libexec/plasma-vnc",
+      "sha256": "51153587f74fa2e4b6d9c82261528090477ff41c0acabebbce53c9027387ed78",
+      "mode": "100755"
+    },
+    {
+      "path": "vendor/kde-container/libexec/plasma-wait",
+      "upstream_path": "libexec/plasma-wait",
+      "sha256": "ad32c37c801dea9be8ea9d2162758495cc680043ad6b2d738c38713dd5ae44d2",
+      "mode": "100755"
+    },
+    {
+      "path": "vendor/kde-container/libexec/plasma-xserver",
+      "upstream_path": "libexec/plasma-xserver",
+      "sha256": "44aff53d0ec1214e22dbfcf3b7fe5eb88ac80f160030f3e7abe2359137afc04d",
+      "mode": "100755"
+    },
+    {
+      "path": "vendor/kde-container/native/CMakeLists.txt",
+      "upstream_path": "native/CMakeLists.txt",
+      "sha256": "21a8653d05967a647a87bb9ba7cc7b6760c1439075981cecaeab9fb50a01ae53",
+      "mode": "100644"
+    },
+    {
+      "path": "vendor/kde-container/native/clipboard.cpp",
+      "upstream_path": "native/clipboard.cpp",
+      "sha256": "9ae854bd526b87a7984d0373829f683c128ec054600d94b6cd833601e0906e3a",
+      "mode": "100644"
+    },
+    {
+      "path": "vendor/kde-container/native/ext-data-control-v1.xml",
+      "upstream_path": "native/ext-data-control-v1.xml",
+      "sha256": "293deba5dfdb974fbcf8dcf891a30a51a36a8bba0047dc6bdf6a03194089b7fb",
+      "mode": "100644"
+    },
+    {
+      "path": "vendor/kde-container/native/fake-input.xml",
+      "upstream_path": "native/fake-input.xml",
+      "sha256": "bc237373f9415e55671b5db15ed8d570c728e1fd62366de423dbe154736941e1",
+      "mode": "100644"
+    },
+    {
+      "path": "vendor/kde-container/native/framebuffer-geometry.h",
+      "upstream_path": "native/framebuffer-geometry.h",
+      "sha256": "d30ea4c0d858095e29afb168d56d8a07c6520edfd38cdcb55d3fa4e4506ba045",
+      "mode": "100644"
+    },
+    {
+      "path": "vendor/kde-container/native/kwin-input.cpp",
+      "upstream_path": "native/kwin-input.cpp",
+      "sha256": "77461526837cad5cf852cc070bd400be777ef91e85894b061e0df1f24f64e9d1",
+      "mode": "100644"
+    },
+    {
+      "path": "vendor/kde-container/native/ui-fixture.cpp",
+      "upstream_path": "native/ui-fixture.cpp",
+      "sha256": "bfea7a630097da2731b1e7d59401effd45e28ca2310cfdb68e28ba5b4ea2017e",
+      "mode": "100644"
+    },
+    {
+      "path": "vendor/kde-container/native/vnc-benchmark.cpp",
+      "upstream_path": "native/vnc-benchmark.cpp",
+      "sha256": "5517b06f752e69e5ee869d6e0658dc98bf5a0a6426759fbc1aef87f8fe6b590e",
+      "mode": "100644"
+    },
+    {
+      "path": "vendor/kde-container/native/wlr-data-control-unstable-v1.xml",
+      "upstream_path": "native/wlr-data-control-unstable-v1.xml",
+      "sha256": "5ac39552975b28d0ea42f636a79b7fc8e2d1fcfa31cbe173f549bd4b044ae2de",
+      "mode": "100644"
+    },
+    {
+      "path": "vendor/kde-container/patches/krfb-existing-output.patch",
+      "upstream_path": "patches/krfb-existing-output.patch",
+      "sha256": "11b837fe4466f5502ba45340767d78dd5fce56fbc66f7d7881c6efb43f6de00b",
+      "mode": "100644"
+    },
+    {
+      "path": "vendor/kde-container/patches/krfb-initial-framebuffer.patch",
+      "upstream_path": "patches/krfb-initial-framebuffer.patch",
+      "sha256": "802b3932d10a320fc3922c476657563a9b86040f581bad3e1255b5d97f8edcda",
+      "mode": "100644"
+    },
+    {
+      "path": "vendor/kde-container/patches/krfb-loopback-relay.patch",
+      "upstream_path": "patches/krfb-loopback-relay.patch",
+      "sha256": "e9bd47b7257aa17ab5334a743373175672e16c6c1d0b10571449e82f9e1903f2",
+      "mode": "100644"
+    },
+    {
+      "path": "vendor/kde-container/patches/krfb-low-latency.patch",
+      "upstream_path": "patches/krfb-low-latency.patch",
+      "sha256": "b7b7738748e4d5de329db9acc0e86b297b64468867e6b1bec7e34ef80d769f8d",
+      "mode": "100644"
+    },
+    {
+      "path": "vendor/kde-container/patches/tigervnc-digest-sizes.patch",
+      "upstream_path": "patches/tigervnc-digest-sizes.patch",
+      "sha256": "b0369c40fce33b4b2c40b74b98aaa0a27ffcddf83182977374b2ee1440bf79f4",
+      "mode": "100644"
+    },
+    {
+      "path": "vendor/kde-container/patches/tigervnc-nettle4.patch",
+      "upstream_path": "patches/tigervnc-nettle4.patch",
+      "sha256": "728310a790b6df409331c2d48c57c913bcbb9e3049d98e4760cea0449414b005",
+      "mode": "100644"
+    },
+    {
+      "path": "vendor/kde-container/patches/tigervnc-pointer-enter.patch",
+      "upstream_path": "patches/tigervnc-pointer-enter.patch",
+      "sha256": "7431f1f65f9ea6014cfb79092d0b54f7a0c0d7564beafa46158b13c3c8defa26",
+      "mode": "100644"
+    },
+    {
+      "path": "vendor/kde-container/systemd/system/plasma-clipboard.service",
+      "upstream_path": "systemd/system/plasma-clipboard.service",
+      "sha256": "4d4c5001680d327b8a4c1106bdddbfb9d2de1c55af9ab5392333cea6347e5511",
+      "mode": "100644"
+    },
+    {
+      "path": "vendor/kde-container/systemd/system/plasma-dbus.service",
+      "upstream_path": "systemd/system/plasma-dbus.service",
+      "sha256": "c8d12b8f22f132b75ef2f332a0d086f6c492e7f62e8934d8c1f2be99d644735d",
+      "mode": "100644"
+    },
+    {
+      "path": "vendor/kde-container/systemd/system/plasma-host-display.service",
+      "upstream_path": "systemd/system/plasma-host-display.service",
+      "sha256": "9bbb7085ab3245beb629b4108022fdd355537f4c72d460d2285e0099fe1873d7",
+      "mode": "100644"
+    },
+    {
+      "path": "vendor/kde-container/systemd/system/plasma-nested-x11.service",
+      "upstream_path": "systemd/system/plasma-nested-x11.service",
+      "sha256": "5fdae14bb398d56f2a34b474ad5cce7ad2947ac6e735d865b8ebb7f872f95777",
+      "mode": "100644"
+    },
+    {
+      "path": "vendor/kde-container/systemd/system/plasma-pipewire.service",
+      "upstream_path": "systemd/system/plasma-pipewire.service",
+      "sha256": "58c33b6fc5280694031fe9ada197fbe97f5319393c65fb2f98d3560bc0c9a4e8",
+      "mode": "100644"
+    },
+    {
+      "path": "vendor/kde-container/systemd/system/plasma-session.service",
+      "upstream_path": "systemd/system/plasma-session.service",
+      "sha256": "dfb14a2aa0a6cae33963912b9a4cfaf78e10c2ab2f8281c1617af10c46c3e4ea",
+      "mode": "100644"
+    },
+    {
+      "path": "vendor/kde-container/systemd/system/plasma-software-display.service",
+      "upstream_path": "systemd/system/plasma-software-display.service",
+      "sha256": "811f5b8a10f6a85a0365b8b687aef38d124cb38021286b65901d3e070ee7e069",
+      "mode": "100644"
+    },
+    {
+      "path": "vendor/kde-container/systemd/system/plasma-vnc.service",
+      "upstream_path": "systemd/system/plasma-vnc.service",
+      "sha256": "031124c3773d66552780a32df5cf9d87588bdce0cbf75e60e78853cbbc9c8bf0",
+      "mode": "100644"
+    },
+    {
+      "path": "vendor/kde-container/systemd/system/plasma-wayland-headless.target",
+      "upstream_path": "systemd/system/plasma-wayland-headless.target",
+      "sha256": "c6302899aee1ea9d4d88a763d8573111a8af1c6b624a237693342477eba4d841",
+      "mode": "100644"
+    },
+    {
+      "path": "vendor/kde-container/systemd/system/plasma-wayland-nested.target",
+      "upstream_path": "systemd/system/plasma-wayland-nested.target",
+      "sha256": "ed86c3795b1a7d46747be9815a2b345f4ed8f8a77a386cef7231fa09771286a0",
+      "mode": "100644"
+    },
+    {
+      "path": "vendor/kde-container/systemd/system/plasma-wayland-vnc.target",
+      "upstream_path": "systemd/system/plasma-wayland-vnc.target",
+      "sha256": "0fe50f1a9004eaad1c7dc24872287480ae7f91b1c796b575dd8921c236689b1f",
+      "mode": "100644"
+    },
+    {
+      "path": "vendor/kde-container/systemd/system/plasma-wayland-web.target",
+      "upstream_path": "systemd/system/plasma-wayland-web.target",
+      "sha256": "23cd37704c2dc26c67fa75bc7d4b52bed12736ff29291591a35759a4dca68219",
+      "mode": "100644"
+    },
+    {
+      "path": "vendor/kde-container/systemd/system/plasma-web.service",
+      "upstream_path": "systemd/system/plasma-web.service",
+      "sha256": "c0c00a18ee59dc26120942035f6020a6a275a212b11114512c01dbb59311e2d3",
+      "mode": "100644"
+    },
+    {
+      "path": "vendor/kde-container/systemd/system/plasma-wireplumber.service",
+      "upstream_path": "systemd/system/plasma-wireplumber.service",
+      "sha256": "913b89c837c93734bd84b56c5b867ddf94235e11e206d52b4a9351056d8f65a3",
+      "mode": "100644"
+    },
+    {
+      "path": "vendor/kde-container/systemd/system/plasma-x11-headless.target",
+      "upstream_path": "systemd/system/plasma-x11-headless.target",
+      "sha256": "465995aa9bc844e3b1ff5fa7a687ec7fb680aae1ee4946ef84c51de83cf89f37",
+      "mode": "100644"
+    },
+    {
+      "path": "vendor/kde-container/systemd/system/plasma-x11-nested.target",
+      "upstream_path": "systemd/system/plasma-x11-nested.target",
+      "sha256": "6ca48a0a82e96a1a791e278d70094ae04f983a0f13561a2e10a9800dff7b5d16",
+      "mode": "100644"
+    },
+    {
+      "path": "vendor/kde-container/systemd/system/plasma-x11-vnc.target",
+      "upstream_path": "systemd/system/plasma-x11-vnc.target",
+      "sha256": "2c4e1c3583e7e055944ca49f148443ffafcc42b3a5224449e02d972d2bfbe2e4",
+      "mode": "100644"
+    },
+    {
+      "path": "vendor/kde-container/systemd/system/plasma-x11-web.target",
+      "upstream_path": "systemd/system/plasma-x11-web.target",
+      "sha256": "dd1132429b5bb1dd9ea492d8cbbe9166e708d05f4d7a9baafa5f29cd77eafd2f",
+      "mode": "100644"
+    },
+    {
+      "path": "vendor/kde-container/systemd/system/plasma-xserver.service",
+      "upstream_path": "systemd/system/plasma-xserver.service",
+      "sha256": "8d39388e4315b4e55dfab85df985c673e5df80f08a56f9a1ac6a915364b8ecd3",
+      "mode": "100644"
+    },
+    {
+      "path": "vendor/kde-container/test/egl-fence-stub.cpp",
+      "upstream_path": "test/egl-fence-stub.cpp",
+      "sha256": "0f976dc845c30eafd72951b227c3af10131e738240b46e9acc4cdc29321db8ff",
+      "mode": "100644"
+    },
+    {
+      "path": "vendor/kde-container/test/egl-fence-test.cpp",
+      "upstream_path": "test/egl-fence-test.cpp",
+      "sha256": "b2f6a74b294f3d9e3546097fc5843111b0dac5f4ba5526bb0ec9ccec0290e5e7",
+      "mode": "100644"
+    },
+    {
+      "path": "build/xwayland-frontend",
+      "upstream_path": "build/xwayland-frontend",
+      "sha256": "3cfa5e964208aa8576b5b63a4f7254e3c7a0f11ab0b619f74f9641b76839692f",
+      "mode": "100755"
+    },
+    {
+      "path": "vendor/kde-container/patches/xwayland-pointer-precision.patch",
+      "upstream_path": "patches/xwayland-pointer-precision.patch",
+      "sha256": "dea4bb819c958e50930aedd5c632fcc340bb55435088a0c1f122cb5dda71efc5",
+      "mode": "100644"
+    },
+    {
+      "path": "vendor/kde-container/test/xwayland-pointer-unit.c",
+      "upstream_path": "test/xwayland-pointer-unit.c",
+      "sha256": "5d77a8c2c741176f4c36b44c04e0bf74a288732a79a9de9781daa211a9c0e0db",
+      "mode": "100644"
+    },
+    {
+      "path": "vendor/kde-container/test/xwayland-pointer-unit.py",
+      "upstream_path": "test/xwayland-pointer-unit.py",
+      "sha256": "a5ceaa1557661348fd1321666780e6a3482cdb5affd4cb922ff5e2f60a38a26d",
+      "mode": "100644"
+    },
+    {
+      "path": "vendor/kde-container/test/test_nested_scale.py",
+      "upstream_path": "test/test_nested_scale.py",
+      "sha256": "c3ff0bcebe09677478670ffd58fbb1452126e7d3edee773a4724d3d979823ce4",
+      "mode": "100644"
+    },
+    {
+      "path": "vendor/kde-container/patches/xwayland-rootful-ready.patch",
+      "upstream_path": "patches/xwayland-rootful-ready.patch",
+      "sha256": "5954b131601a5eed50007a073bd354eabca8265b2c9d00b6eccbf11d04910838",
+      "mode": "100644"
+    },
+    {
+      "path": "vendor/kde-container/test/xwayland-rootful-ready-unit.c",
+      "upstream_path": "test/xwayland-rootful-ready-unit.c",
+      "sha256": "dad308a083c2ac349cab723898b1d28c48a6d7ec84add9279f6297b9efc5ba05",
+      "mode": "100644"
+    }
+  ]
+}

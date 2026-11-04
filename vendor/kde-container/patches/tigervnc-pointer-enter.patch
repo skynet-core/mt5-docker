@@ -1,0 +1,25 @@
+diff --git a/vncviewer/Viewport.cxx b/vncviewer/Viewport.cxx
+--- a/vncviewer/Viewport.cxx
++++ b/vncviewer/Viewport.cxx
+@@ -457,17 +457,16 @@
+ 
+     return 1;
+ 
+-  case FL_ENTER:
+-    showCursor();
+-    // Yes, we would like some pointer events please!
+-    return 1;
+-
+   case FL_LEAVE:
+     window()->cursor(FL_CURSOR_DEFAULT);
+     // We want a last move event to help trigger edge stuff
+     handlePointerEvent({Fl::event_x() - x(), Fl::event_y() - y()}, 0);
+     return 1;
+ 
++  case FL_ENTER:
++    showCursor();
++    // FLTK delivers the first motion over a newly entered widget as enter.
++    // fall through
+   case FL_PUSH:
+   case FL_RELEASE:
+   case FL_DRAG:

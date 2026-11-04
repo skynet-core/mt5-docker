@@ -97,6 +97,7 @@ class ValidationBoundary:
         native=False,
         history_retry=False,
         report_retry=False,
+        restore_retry=False,
     ):
         self.args = SimpleNamespace(
             runtime="docker",
@@ -114,6 +115,8 @@ class ValidationBoundary:
         self.failure = failure
         self.history_retry = history_retry
         self.report_retry = report_retry
+        self.restore_retry = restore_retry
+        self.restored_snapshots = 0
         self.history_calls = 0
         self.report_copies = 0
         self.clock = 0
@@ -265,11 +268,20 @@ class ValidationBoundary:
                     if self.failure == "close-timeout" and self.close_calls == 2:
                         raise subprocess.TimeoutExpired(command, 45)
                 elif "ImageGrab.grab" in program[-1]:
+                    restored = self.close_calls >= 2
+                    if restored:
+                        self.restored_snapshots += 1
+                        if self.failure == "restored-window-missing" or (
+                            self.restore_retry and self.restored_snapshots < 3
+                        ):
+                            return reply(returncode=1, stderr=b"No MT5 window")
                     self.files[f"{validator.MT5}/validation-window.png"] = (
                         png(Image.new("RGB", (10, 10)))
                         if self.failure == "small-application"
+                        or (restored and self.failure == "restored-window-small")
                         else png(Image.new("RGB", (640, 480)))
                         if self.failure == "blank-application"
+                        or (restored and self.failure == "restored-window-blank")
                         else self.application
                     )
                 return reply(b"private Wine process\n")
@@ -310,6 +322,62 @@ class ValidationBoundary:
 
 
 class BrokerValidationTests(unittest.TestCase):
+    def test_backtest_requires_a_restored_application_before_completion(self):
+        with tempfile.TemporaryDirectory() as directory:
+            boundary = ValidationBoundary(directory)
+            boundary.run()
+            output = Path(directory) / "test"
+            result = json.loads((output / "results.json").read_text())
+            self.assertEqual(boundary.restored_snapshots, 1)
+            self.assertEqual(result["restored_screenshot"], "application-restored.png")
+            self.assertEqual(
+                (output / result["restored_screenshot"]).read_bytes(),
+                boundary.application,
+            )
+            resumed = next(
+                i for i, command in enumerate(boundary.commands) if "-CONT" in command
+            )
+            captures = [
+                i
+                for i, command in enumerate(boundary.commands)
+                if any("ImageGrab.grab" in argument for argument in command)
+            ]
+            self.assertLess(captures[0], resumed)
+            self.assertGreater(captures[-1], resumed)
+
+    def test_backtest_waits_for_the_restarted_window_without_repeating_the_test(self):
+        with tempfile.TemporaryDirectory() as directory:
+            boundary = ValidationBoundary(directory, restore_retry=True)
+            boundary.args.timeout = 20
+            boundary.run()
+            self.assertEqual(boundary.restored_snapshots, 3)
+            self.assertEqual(
+                sum(
+                    r"C:\MT5\terminal64.exe" in command for command in boundary.commands
+                ),
+                1,
+            )
+
+    def test_backtest_never_completes_with_a_missing_small_or_blank_restored_window(
+        self,
+    ):
+        for failure in (
+            "restored-window-missing",
+            "restored-window-small",
+            "restored-window-blank",
+        ):
+            with (
+                self.subTest(failure=failure),
+                tempfile.TemporaryDirectory() as directory,
+            ):
+                boundary = ValidationBoundary(directory, failure=failure)
+                with self.assertRaises(RuntimeError):
+                    boundary.run()
+                result = json.loads((Path(directory) / "test/results.json").read_text())
+                self.assertFalse(result["passed"])
+                self.assertEqual(result["phase"], "application-restored")
+                self.assertTrue((Path(directory) / "test/report.htm").exists())
+
     def test_full_success_retains_real_reports_pngs_and_private_diagnostics(self):
         with tempfile.TemporaryDirectory() as directory:
             boundary = ValidationBoundary(
@@ -349,6 +417,90 @@ class BrokerValidationTests(unittest.TestCase):
             self.assertNotIn("calls", public)
             self.assertNotIn("container", public)
             self.assertTrue(any("-CONT" in command for command in boundary.commands))
+
+    def test_history_wait_honors_the_configured_budget_and_still_fails_empty_data(self):
+        cases = (
+            ("late-history", 600, None, True, 3, 2),
+            ("short-budget", 1, None, True, 1, 0),
+            ("permanent-empty", 600, "history-timeout", False, 6, 5),
+        )
+        for name, timeout, failure, retry, calls, sleeps in cases:
+            with self.subTest(case=name), tempfile.TemporaryDirectory() as directory:
+                boundary = ValidationBoundary(
+                    directory, failure=failure, history_retry=retry
+                )
+                boundary.args.timeout = timeout
+                observed_sleeps = []
+
+                def monotonic(
+                    boundary=boundary,
+                    failure=failure,
+                    timeout=timeout,
+                    observed_sleeps=observed_sleeps,
+                ):
+                    step = (
+                        100
+                        if failure
+                        else 200
+                        if timeout == 600 and boundary.history_calls in (1, 2)
+                        else 1
+                    )
+                    boundary.clock += step
+                    observed_sleeps[:] = validator.asyncio.sleep.call_args_list
+                    return boundary.clock
+
+                boundary.monotonic = monotonic
+                # Keep asyncio's own clock real; only the validator's existing clock advances.
+                with patch.object(
+                    validator,
+                    "time",
+                    SimpleNamespace(time=lambda: 0, monotonic=lambda: 0),
+                ):
+                    if name == "late-history":
+                        boundary.run()
+                    else:
+                        with self.assertRaisesRegex(RuntimeError, "Historical M1 bars"):
+                            boundary.run()
+                output = Path(directory) / "test"
+                evidence = json.loads((output / "results.json").read_text())
+                self.assertEqual(boundary.history_calls, calls)
+                self.assertEqual(len(observed_sleeps), sleeps)
+                self.assertTrue(all(call.args == (2,) for call in observed_sleeps))
+                self.assertEqual(
+                    [
+                        request[1]["parameters"]
+                        for request in boundary.queries
+                        if request[1]["operation"] == "copy_rates_range"
+                    ],
+                    [
+                        {
+                            "timeframe": "M1",
+                            "date_from": 1788220800,
+                            "date_to": 1788825600,
+                        }
+                    ]
+                    * calls,
+                )
+                if name == "late-history":
+                    self.assertTrue(evidence["passed"])
+                    self.assertTrue(evidence["compiled"])
+                    self.assertEqual(evidence["phase"], "complete")
+                    self.assertTrue((output / "report.htm").is_file())
+                    self.assertTrue((output / "application-restored.png").is_file())
+                else:
+                    self.assertFalse(evidence["passed"])
+                    self.assertEqual(evidence["phase"], "copy_rates_range")
+                    self.assertNotIn("compiled", evidence)
+                    self.assertFalse((output / "ExpertMACD.ex5").exists())
+                    self.assertFalse((output / "report.htm").exists())
+                    self.assertFalse(
+                        any(
+                            r"C:\MT5\terminal64.exe" in command
+                            for command in boundary.commands
+                        )
+                    )
+                if name == "permanent-empty":
+                    self.assertEqual(boundary.clock, 700)
 
     def test_bundled_expert_compiles_in_place_and_is_selected_for_the_tester(self):
         with tempfile.TemporaryDirectory() as directory:

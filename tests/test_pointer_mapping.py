@@ -163,6 +163,9 @@ class NestedMappingTests(unittest.TestCase):
             ("center", 1, (240, 206, 800, 600), [540, 336], (440, 356)),
             ("center", 1.25, (320, 266, 640, 480), [725, 458], (480, 386)),
             ("center", 2, (440, 356, 400, 300), [1280, 822], (540, 431)),
+            ("center-logical", 1, (240, 206, 800, 600), [540, 336], (440, 356)),
+            ("center-logical", 1.25, (240, 206, 800, 600), [675, 420], (440, 356)),
+            ("center-logical", 2, (240, 206, 800, 600), [1080, 672], (440, 356)),
             ("top-left", 1, (140, 106, 800, 600), [440, 236], (340, 256)),
             ("top-left", 1.25, (140, 106, 640, 480), [500, 258], (300, 226)),
             ("top-left", 2, (140, 106, 400, 300), [680, 322], (240, 181)),
@@ -199,6 +202,9 @@ class NestedMappingTests(unittest.TestCase):
             ("center", 1, (340, 186, 1140, 786)),
             ("center", 1.25, (525, 308, 1325, 908)),
             ("center", 2, (1080, 672, 1880, 1272)),
+            ("center-logical", 1, (340, 186, 1140, 786)),
+            ("center-logical", 1.25, (425, 232, 1425, 982)),
+            ("center-logical", 2, (680, 372, 2280, 1572)),
             ("top-left", 1, (240, 86, 1040, 686)),
             ("top-left", 1.25, (300, 108, 1100, 708)),
             ("top-left", 2, (480, 172, 1280, 772)),
@@ -216,7 +222,7 @@ class NestedMappingTests(unittest.TestCase):
                     geometry={"origin": {"x": -100, "y": 20}, "scale": scale},
                 )
                 client.viewport_anchor = anchor
-                image = Image.new("RGB", (2048, 1500), "magenta")
+                image = Image.new("RGB", (2560, 1800), "magenta")
                 left, top, right, bottom = bounds
                 draw = ImageDraw.Draw(image)
                 draw.rectangle((left, top, right - 1, bottom - 1), fill="orange")
@@ -225,12 +231,16 @@ class NestedMappingTests(unittest.TestCase):
                 client.parent.screenshot.return_value = image
                 cropped = client.screenshot()
                 self.assertEqual(cropped.size, (800, 600))
-                self.assertEqual(cropped.tobytes(), image.crop(bounds).tobytes())
-                self.assertEqual(cropped.getpixel((0, 0)), (255, 0, 0))
-                self.assertEqual(cropped.getpixel((799, 599)), (255, 255, 0))
+                self.assertEqual(
+                    cropped.tobytes(), image.crop(bounds).resize((800, 600)).tobytes()
+                )
+                if anchor != "center-logical" or scale == 1:
+                    self.assertEqual(cropped.getpixel((0, 0)), (255, 0, 0))
+                    self.assertEqual(cropped.getpixel((799, 599)), (255, 255, 0))
+                viewport_scale = 1 if anchor == "center-logical" else scale
                 for dimension, limit in (
-                    ("width", 800 / scale),
-                    ("height", 600 / scale),
+                    ("width", 800 / viewport_scale),
+                    ("height", 600 / viewport_scale),
                 ):
                     original = client.window["client"][dimension]
                     client.window["client"][dimension] = limit - 1
@@ -439,7 +449,26 @@ class NestedMappingTests(unittest.TestCase):
                 modes=["nested"],
                 pointer_scales=[1, 1.25, 2],
             )
-            execute = Mock(return_value=SimpleNamespace(stdout=b"support", stderr=b""))
+
+            def command(*arguments, **_options):
+                output = (
+                    json.dumps(
+                        {
+                            "devices": [
+                                {
+                                    "hardware": True,
+                                    "vendor": "NVIDIA",
+                                    "renderer": "NVIDIA test GPU",
+                                }
+                            ]
+                        }
+                    ).encode()
+                    if arguments[-1] == "/etc/plasma/gpu.json"
+                    else b"OpenGL vendor string: NVIDIA\nOpenGL renderer string: NVIDIA test GPU\n"
+                )
+                return subprocess.CompletedProcess(arguments, 0, output, b"")
+
+            execute = Mock(side_effect=command)
             for changes in ({"modes": ["nested", "vnc"]}, {"parent_image": None}):
                 invalid = SimpleNamespace(**(vars(args) | changes))
                 with (
@@ -474,10 +503,13 @@ class NestedMappingTests(unittest.TestCase):
                     "DISPLAY_MODE": mode,
                     "HOST_DISPLAY_BACKEND": host,
                     "MT5_PASSWORD": "synthetic-secret-must-not-be-published",
+                    "LIBGL_ALWAYS_SOFTWARE": "0",
+                    "PLASMA_NVIDIA_NESTED": str(int(backend == "x11")),
                     "PLASMA_SOFTWARE_NESTED": str(
                         int(backend == "wayland" and host == "x11")
                     ),
                 }
+                driver.logical_presenter = backend == "x11" and host == "wayland"
                 if not options.get("sleep"):
                     self.assertTrue(
                         {"MT5_ACCOUNT=", "MT5_LOGIN=", "MT5_PASSWORD=", "MT5_SERVER="}
@@ -513,7 +545,7 @@ class NestedMappingTests(unittest.TestCase):
             driver.output_scale.side_effect = scale_output
 
             def natural_window():
-                scale = driver.output["scale"]
+                scale = 1 if driver.logical_presenter else driver.output["scale"]
                 return {
                     "windows": [
                         {
@@ -558,17 +590,22 @@ class NestedMappingTests(unittest.TestCase):
                     client.viewport_anchor,
                     {
                         ("wayland", "nested", "on-x11"): "center",
-                        ("x11", "nested", "on-x11"): "top-left",
+                        ("x11", "nested", "on-x11"): "center",
+                        ("x11", "nested", "on-wayland"): "center-logical",
                     }.get(client.output.parts[-3:]),
                 )
                 expected = (
-                    {1: [360, 286], 1.25: [420, 308], 2: [600, 372]}
+                    {1: [360, 286], 1.25: [450, 358], 2: [720, 572]}
+                    if client.viewport_anchor == "center-logical"
+                    else {1: [360, 286], 1.25: [420, 308], 2: [600, 372]}
                     if client.viewport_anchor
                     else {1: [300, 186], 1.25: [375, 232], 2: [600, 372]}
                 )
                 point, logical = client.framebuffer_point(120, 200)
                 self.assertEqual(point, expected[driver.output["scale"]])
-                if client.viewport_anchor:
+                if client.viewport_anchor == "center-logical":
+                    self.assertEqual(logical, (260, 306))
+                elif client.viewport_anchor:
                     expected_logical = {1: (260, 306), 1.25: (236, 266), 2: (200, 206)}
                     self.assertEqual(logical, expected_logical[driver.output["scale"]])
                 else:
@@ -624,12 +661,12 @@ class NestedMappingTests(unittest.TestCase):
                     for invocation in (
                         call(140, 70, 1280, 996),
                         call(140, 70, 1200 / scale, 800 / scale + 36),
-                        call(140, 70, 1280, 996),
+                        call(140, 70, 1200, 836),
                         call(140, 70, 1200 / scale, 800 / scale + 36),
                     )
                 ],
             )
-            self.assertEqual(driver.wait_window.call_count, 6)
+            self.assertEqual(driver.wait_window.call_count, 9)
             driver.state.assert_not_called()
             connect.assert_called_once()
             parent.close.assert_called_once_with()
@@ -650,7 +687,10 @@ class NestedMappingTests(unittest.TestCase):
             )
             self.assertEqual(
                 [
-                    (row["startup_dpi"]["edit_height"], row["startup_dpi"]["expected_edit_height"])
+                    (
+                        row["startup_dpi"]["edit_height"],
+                        row["startup_dpi"]["expected_edit_height"],
+                    )
                     for row in report["cases"]
                     if "startup_dpi" in row
                 ],
@@ -672,8 +712,10 @@ class NestedMappingTests(unittest.TestCase):
                 },
             )
             for row in report["cases"]:
-                fixed = row["host_backend"] == "x11"
+                fixed = row["backend"] == "x11" or row["host_backend"] == "x11"
                 scale = row["parent_output"]["scale"]
+                if row["backend"] == "x11" and row["host_backend"] == "wayland":
+                    scale = 1
                 self.assertEqual(
                     row["viewport"],
                     {

@@ -1,5 +1,8 @@
 patch
-tigervnc
+fltk1.3
+pam
+pixman
+libxrender
 extra-cmake-modules
 qt6-tools
 qt6-wayland
@@ -31,3 +34,13 @@ kpipewire
 pipewire
 plasma-wayland-protocols
 kwayland
+meson
+xtrans
+libxfont2
+libxkbfile
+libxcvt
+libdecor
+wayland-protocols
+xz
+libxshmfence
+libdrm

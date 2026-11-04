@@ -7,6 +7,7 @@
 #include <QFile>
 #include <QImage>
 #include <QLabel>
+#include <QPixmap>
 #include <QPushButton>
 #include <QScreen>
 #include <QTemporaryDir>
@@ -32,11 +33,24 @@ public:
 };
 
 // These dependency responses exercise the capture code's trust boundaries.
-QScreen *QGuiApplication::primaryScreen() {
-  return applicationReady && scenario == "capture-no-screen"
-             ? nullptr
-             : screens().value(0);
-}
+class ControlledScreen {
+public:
+  QSize size() const {
+    return scenario == "capture-x11-empty"
+               ? QSize()
+               : QGuiApplication::primaryScreen()->size();
+  }
+  QRect geometry() const {
+    return QGuiApplication::primaryScreen()->geometry();
+  }
+  QPixmap grabWindow(WId window, int x = 0, int y = 0, int width = -1,
+                     int height = -1) {
+    if (scenario == "capture-x11-empty" && (width < 0 || height < 0))
+      return {};
+    return QGuiApplication::primaryScreen()->grabWindow(window, x, y, width,
+                                                        height);
+  }
+};
 
 class ControlledTemporaryFile : public QTemporaryFile {
 public:
@@ -47,6 +61,11 @@ public:
 
 class ControlledGuiApplication : public QGuiApplication {
 public:
+  static ControlledScreen *primaryScreen() {
+    static ControlledScreen screen;
+    return applicationReady && scenario == "capture-no-screen" ? nullptr
+                                                               : &screen;
+  }
   static QString platformName() {
     return scenario == "capture-cursor-x11" ? "xcb"
                                             : QGuiApplication::platformName();
@@ -112,14 +131,17 @@ int main(int argc, char **argv) {
   qputenv("XDG_RUNTIME_DIR", temporary.path().toUtf8());
   qputenv("DBUS_SESSION_BUS_ADDRESS",
           "unix:path=/nonexistent-private-native-unit-bus");
-  qputenv("QT_QPA_PLATFORM", scenario == "capture-x11" ? "xcb" : "offscreen");
+  const bool x11 = scenario.startsWith("capture-x11");
+  qputenv("QT_QPA_PLATFORM", x11 ? "xcb" : "offscreen");
   qputenv("QT_QPA_PLATFORMTHEME", "generic");
-  if (scenario == "capture-x11") {
+  if (x11) {
     // The caller must provide a private Xvfb; never discover a user display.
     const QByteArray display = qgetenv("NATIVE_TEST_DISPLAY");
     if (display.isEmpty())
       return 77;
     qputenv("DISPLAY", display);
+    qputenv("DISPLAY_WIDTH", "800");
+    qputenv("DISPLAY_HEIGHT", "600");
   } else {
     qunsetenv("DISPLAY");
     qunsetenv("WAYLAND_DISPLAY");
@@ -200,10 +222,17 @@ int main(int argc, char **argv) {
   std::fflush(stdout);
   assert(dup2(saved, STDOUT_FILENO) >= 0);
   close(saved);
-  const bool success = scenario == "capture-ok" || scenario == "capture-x11" ||
+  const bool success = scenario == "capture-ok" || x11 ||
                        scenario == "capture-cursor" ||
                        !scenario.startsWith("capture-");
   assert(result == (scenario == "invalid-args" ? 2 : success ? 0 : 1));
+  if (x11) {
+    assert(QImage(output).size() == QSize(800, 600));
+    assert(metadata.seek(0));
+    const auto object = QJsonDocument::fromJson(metadata.readAll()).object();
+    assert(object.value("method") == "x11-root");
+    assert(object.value("width") == 800 && object.value("height") == 600);
+  }
   if (scenario == "capture-ok" || scenario == "capture-cursor") {
     assert(!QImage(output).isNull());
     assert(metadata.seek(0));

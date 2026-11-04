@@ -1,12 +1,20 @@
 #!/usr/bin/bash
 set -euo pipefail
 extra=()
+if [[ ${PLASMA_NVIDIA_NESTED:-0} == 1 || ${PLASMA_SOFTWARE_NESTED:-0} == 1 ]]; then
+	extra+=(-localhost)
+fi
+if [[ ${PLASMA_SOFTWARE_NESTED:-0} == 1 ]]; then
+	# x11vnc and LibVNCServer each create an IPv6 listener.
+	extra+=(-no6 -rfbportv6 -1)
+fi
 if [[ $DISPLAY_BACKEND == wayland && ${PLASMA_SOFTWARE_CAPTURE:-0} != 1 ]]; then
 	export PLASMA_KWIN_INPUT=1
 	# Virtualmonitor requires no interactive portal approval.
 	password=$(cat /etc/plasma/vnc-password)
+	scale=$(/usr/local/libexec/plasma-remote-output --scale)
 	exec /usr/bin/krfb-virtualmonitor --name Plasma \
-		--resolution "${DISPLAY_WIDTH}x${DISPLAY_HEIGHT}" --port 5900 \
+		--resolution "${DISPLAY_WIDTH}x${DISPLAY_HEIGHT}" --scale "$scale" --port 5900 \
 		--password "$password"
 fi
 if [[ ${PLASMA_SOFTWARE_CAPTURE:-0} == 1 ]]; then
@@ -17,8 +25,10 @@ if [[ ${PLASMA_SOFTWARE_CAPTURE:-0} == 1 ]]; then
 	# Preserve actual Shift/Ctrl transitions for KWin's nested input backend.
 	# XKB modifier-state rewrites do not generate the key events it consumes.
 	extra+=(-nomodtweak -noxkb)
-	export LD_PRELOAD=/usr/local/lib/plasma6/xtest-paced.so
 fi
+# Calibration processes RFB input outside x11vnc's normal X11 flush loop.
+export LD_PRELOAD="/usr/local/lib/plasma6/xtest-paced.so${LD_PRELOAD:+:$LD_PRELOAD}"
+# Client name lookup must not block the RFB event loop.
 exec /usr/bin/x11vnc -display "$DISPLAY" -auth "$XAUTHORITY" \
-	-rfbauth /etc/plasma/vnc-auth -rfbport 5900 -forever -shared -noxdamage \
+	-rfbauth /etc/plasma/vnc-auth -rfbport 5900 -forever -shared -noxdamage -nolookup \
 	-wait "$(((1000 + VNC_MAX_FPS - 1) / VNC_MAX_FPS))" -defer 0 "${extra[@]}"

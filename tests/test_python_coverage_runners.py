@@ -209,6 +209,12 @@ class SmokeRunnerTests(unittest.TestCase):
                     if failure == "version"
                     else b"KWin version: 6.8.2\n"
                 )
+            elif command[-1] == smoke.MCP_CHECK:
+                if failure == "mcp":
+                    return SimpleNamespace(
+                        stdout=b"", stderr=b"synthetic MCP failure", returncode=23
+                    )
+                body = b'{"handshake": true, "ping": true, "query_pending": true, "busy_rejected": true}\n'
             elif command[-1] == smoke.WINDOWS_CHECK:
                 if failure == "windows-timeout":
                     raise subprocess.TimeoutExpired(
@@ -259,9 +265,16 @@ class SmokeRunnerTests(unittest.TestCase):
             self.assertTrue(evidence["passed"])
             self.assertEqual(evidence["kwin_version"], "6.8.2")
             self.assertTrue(evidence["windows"]["mcp_server_created"])
+            self.assertTrue(evidence["mcp"]["ping"])
             self.assertEqual(evidence["network"], "none")
             run = calls[0]
             self.assertEqual(run[run.index("--network") + 1], "none")
+            self.assertIn("--entrypoint=/usr/local/bin/mt5-test-init", run)
+            self.assertIn(
+                f"type=bind,source={ROOT / 'tests/isolated-entrypoint.sh'},target=/usr/local/bin/mt5-test-init,readonly",
+                run,
+            )
+            self.assertIn("LIBGL_ALWAYS_SOFTWARE=1", run)
             self.assertIn(
                 "type=bind,source=/dev/null,target=/etc/systemd/system/mt5-mcp.service,readonly",
                 run,
@@ -271,7 +284,7 @@ class SmokeRunnerTests(unittest.TestCase):
             self.assertTrue((output / "windows.log").is_file())
 
     def test_failure_stages_record_error_and_attempt_disposable_cleanup(self):
-        for failure in ("payload", "version", "readiness", "windows-timeout"):
+        for failure in ("payload", "version", "readiness", "windows-timeout", "mcp"):
             with (
                 self.subTest(failure=failure),
                 tempfile.TemporaryDirectory() as directory,

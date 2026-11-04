@@ -203,20 +203,30 @@ class DesktopHealthTests(unittest.TestCase):
                     mode == "web",
                 )
 
-    def test_nested_clipboard_and_software_relay_are_individually_required(self):
-        calls = self.probe(
-            mode="nested", extra={"CLIPBOARD_SYNC": "1", "PLASMA_SOFTWARE_NESTED": "1"}
-        )
-        units = [command[-1] for command, _ in calls if command[0] == "systemctl"]
-        self.assertIn("plasma-clipboard.service", units)
-        self.assertIn("plasma-nested-x11.service", units)
-        self.assertIn("plasma-vnc.service", units)
-        with self.assertRaises(subprocess.CalledProcessError):
-            self.probe(
-                mode="nested",
-                extra={"CLIPBOARD_SYNC": "1"},
-                failed="plasma-clipboard.service",
-            )
+    def test_nested_clipboard_and_each_relay_are_individually_required(self):
+        for relay in ("PLASMA_SOFTWARE_NESTED", "PLASMA_NVIDIA_NESTED"):
+            settings = {"CLIPBOARD_SYNC": "1", relay: "1"}
+            with self.subTest(relay=relay):
+                calls = self.probe(mode="nested", extra=settings)
+                commands = [command for command, _ in calls]
+                units = [
+                    command[-1] for command in commands if command[0] == "systemctl"
+                ]
+                for unit in (
+                    "plasma-clipboard.service",
+                    "plasma-nested-x11.service",
+                    "plasma-vnc.service",
+                ):
+                    self.assertIn(unit, units)
+                    with self.assertRaises(subprocess.CalledProcessError):
+                        self.probe(mode="nested", extra=settings, failed=unit)
+                self.assertIn(
+                    ["/usr/local/libexec/plasma-remote-output", "--check"], commands
+                )
+                self.assertIn(["/usr/local/libexec/plasma-wait", "vnc"], commands)
+                for failed in ("/usr/local/libexec/plasma-remote-output", "vnc"):
+                    with self.assertRaises(subprocess.CalledProcessError):
+                        self.probe(mode="nested", extra=settings, failed=failed)
 
 
 if __name__ == "__main__":

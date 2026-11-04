@@ -19,7 +19,7 @@ from pathlib import Path
 from clipboard import configuration
 from display_matrix import case_path, profiles
 from kwin_driver import KWinDriver
-from PIL import Image, ImageChops
+from PIL import Image, ImageChops, ImageFilter
 from playwright.sync_api import sync_playwright
 from rfb import RFBClient
 from runtime import (
@@ -27,6 +27,7 @@ from runtime import (
     collect,
     execute,
     parent_x11,
+    require_gpu,
     session_identity,
     start,
 )
@@ -114,6 +115,8 @@ def chart_target(image, color, scale=1):
     bounds = (
         ImageChops.lighter(red, ImageChops.lighter(green, blue))
         .point(lambda value: 255 if value < 3 else 0)
+        .filter(ImageFilter.MinFilter(5))
+        .filter(ImageFilter.MaxFilter(5))
         .getbbox()
     )
     width, height = (math.ceil(size * max(1, scale)) for size in (120, 44))
@@ -154,6 +157,7 @@ def autologin_input(runtime, container, client, probe, output, target_scale=1):
         raise RuntimeError("Autologin regression must start without a native dialog")
     deadline = time.monotonic() + 30
     attempts = []
+    previous_targets = []
     while True:
         ready = any(
             row["event"] == "READY" for row in chart_events(runtime, container, output)
@@ -169,20 +173,26 @@ def autologin_input(runtime, container, client, probe, output, target_scale=1):
             ]
         except RuntimeError as error:
             reason = str(error)
+        # A partially painted frame can shift the detected target center.
+        stable = ready and bool(targets) and targets == previous_targets
+        if ready and targets:
+            reason = "ChartInput target bounds have not stabilized"
         attempts.append(
             {
                 "capture": capture,
                 "ready": ready,
                 "targets_visible": bool(targets),
-                "reason": None if ready and targets else reason,
+                "targets_stable": stable,
+                "reason": None if stable else reason,
             }
         )
         (output / "startup-attempts.json").write_text(
             json.dumps(attempts, indent=2) + "\n"
         )
-        if ready and targets:
+        if stable:
             image.save(output / "startup.png")
             break
+        previous_targets = targets if ready else []
         if time.monotonic() >= deadline:
             raise RuntimeError(
                 "ChartInput did not initialize visibly without a native dialog: "
@@ -241,6 +251,7 @@ class BrowserClient:
         self.browser = self.context = self.page = None
         self.failed_requests = []
         self.network_change_reload = False
+        self.startup_attempts = []
         try:
             self.browser = self.driver.chromium.launch(headless=True)
             self.context = self.browser.new_context(
@@ -249,46 +260,78 @@ class BrowserClient:
             self.context.tracing.start(screenshots=True, snapshots=True)
             self.page = self.context.new_page()
             self.page.on("requestfailed", self._request_failed)
-            for attempt in range(2):
+            # Retain the former two 30-second canvas attempts as one budget.
+            deadline = time.monotonic() + 60
+
+            def timeout():
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError("noVNC startup exceeded its 60-second budget")
+                return min(30000, math.ceil(remaining * 1000))
+
+            while True:
                 first_failure = len(self.failed_requests)
+                attempt = {
+                    "attempt": len(self.startup_attempts) + 1,
+                    "stage": "navigation",
+                }
+                self.startup_attempts.append(attempt)
                 try:
-                    if attempt:
-                        self.page.reload()
+                    if attempt["attempt"] > 1:
+                        self.page.reload(timeout=timeout())
                     else:
                         self.page.goto(
-                            f"http://{host}:{port}/vnc.html?autoconnect=true&resize=off&password=testpass"
+                            f"http://{host}:{port}/vnc.html?autoconnect=true&resize=off&password=testpass",
+                            timeout=timeout(),
                         )
+                    # Failed ES-module graphs cannot create an RFB canvas.
+                    if self._preconnect_network_change(first_failure):
+                        raise RuntimeError(
+                            "noVNC module load cancelled by network change"
+                        )
+                    attempt["stage"] = "canvas"
                     self.canvas = self.page.locator("#noVNC_container canvas")
-                    self.canvas.wait_for(state="visible", timeout=30000)
+                    self.canvas.wait_for(state="visible", timeout=timeout())
+                    attempt["stage"] = "dimensions"
                     self.page.wait_for_function(
-                        "document.querySelector('#noVNC_container canvas')?.width >= 800"
+                        "document.querySelector('#noVNC_container canvas')?.width >= 800",
+                        timeout=timeout(),
                     )
-                    # Frames arrive before noVNC's connecting overlay fades.
+                    attempt["stage"] = "overlay"
                     self.page.locator("#noVNC_transition").wait_for(
-                        state="hidden", timeout=30000
+                        state="hidden", timeout=timeout()
                     )
+                    attempt["stage"] = "ready"
+                    attempt["failed_requests"] = self.failed_requests[first_failure:]
                     break
-                except Exception:
-                    failures = self.failed_requests[first_failure:]
-                    # Docker bridge changes can cancel Chromium module loads.
-                    if (
-                        attempt
-                        or not failures
-                        or any(
-                            failure["failure"] != "net::ERR_NETWORK_CHANGED"
-                            for failure in failures
-                        )
-                        or not any(
-                            failure["resource_type"] in ("document", "script")
-                            for failure in failures
-                        )
-                    ):
+                except Exception as error:
+                    attempt["failed_requests"] = self.failed_requests[first_failure:]
+                    attempt["error_type"] = type(error).__name__
+                    recover = self._preconnect_network_change(first_failure)
+                    attempt["network_change_recovery"] = (
+                        recover and time.monotonic() < deadline
+                    )
+                    if not attempt["network_change_recovery"]:
                         raise
                     self.network_change_reload = True
         except Exception:
             with contextlib.suppress(Exception):
                 self.close()
             raise
+
+    def _preconnect_network_change(self, first_failure):
+        failures = self.failed_requests[first_failure:]
+        return (
+            bool(failures)
+            and all(
+                failure["failure"] == "net::ERR_NETWORK_CHANGED" for failure in failures
+            )
+            and any(
+                failure["resource_type"] in ("document", "script")
+                for failure in failures
+            )
+            and self.page.locator("#noVNC_container canvas").count() == 0
+        )
 
     def _request_failed(self, request):
         self.failed_requests.append(
@@ -351,6 +394,7 @@ class BrowserClient:
                     {
                         "failed_requests": self.failed_requests,
                         "network_change_reload": self.network_change_reload,
+                        "startup_attempts": getattr(self, "startup_attempts", []),
                     },
                     indent=2,
                 )
@@ -477,12 +521,17 @@ class NestedClient:
         client = dict(self.window["client"])
         if self.viewport_anchor:
             width, height = self.desktop()[2:]
-            scale = self.driver.output["scale"]
+            # Rootful Wayland presentation pixels occupy host logical units.
+            scale = (
+                1
+                if self.viewport_anchor == "center-logical"
+                else self.driver.output["scale"]
+            )
             width, height = width / scale, height / scale
             if width > client["width"] or height > client["height"]:
                 raise RuntimeError("Private relay viewport is clipped")
             # TigerVNC centres its framebuffer; Xephyr's active monitor starts at 0,0.
-            if self.viewport_anchor == "center":
+            if self.viewport_anchor in ("center", "center-logical"):
                 client["x"] += (client["width"] - width) / 2
                 client["y"] += (client["height"] - height) / 2
             client.update(width=width, height=height)
@@ -706,16 +755,20 @@ def wait_state(probe, predicate, expected="", timeout=20):
         time.sleep(0.2)
 
 
-def startup_dpi(probe, client, output, expected, *, dialog=False, reference_height=None):
+def startup_dpi(
+    probe, client, output, expected, *, dialog=False, reference_height=None
+):
     """Observe the original MT5 window before input or an outer-window resize."""
     state = wait_state(
         probe,
-        lambda value: bool(value["main"])
-        and (
-            not dialog
-            or any(
-                item.get("edit") and item["root"] != value["main"]
-                for item in value["controls"]
+        lambda value: (
+            bool(value["main"])
+            and (
+                not dialog
+                or any(
+                    item.get("edit") and item["root"] != value["main"]
+                    for item in value["controls"]
+                )
             )
         ),
         timeout=120,
@@ -1103,6 +1156,16 @@ def main(args):
                     check=False,
                 )
                 (output / "compositor.log").write_bytes(support.stdout + support.stderr)
+                if args.gpu:
+                    gpu = execute(
+                        args.runtime, "exec", name, "cat", "/etc/plasma/gpu.json"
+                    ).stdout
+                    (output / "gpu.json").write_bytes(gpu)
+                    (output / "session.json").write_text(json.dumps(session, indent=2))
+                    support.check_returncode()
+                    report.update(
+                        require_gpu(json.loads(gpu), session, support.stdout.decode())
+                    )
                 client = (
                     parent_client
                     if mode == "nested"
@@ -1125,8 +1188,12 @@ def main(args):
                         backend == "wayland" and host == "wayland"
                     )
                     viewport_anchor = (
-                        "center"
+                        "center-logical"
+                        if session.get("PLASMA_NVIDIA_NESTED") == "1"
+                        and host == "wayland"
+                        else "center"
                         if session.get("PLASMA_SOFTWARE_NESTED") == "1"
+                        or session.get("PLASMA_NVIDIA_NESTED") == "1"
                         else "top-left"
                         if backend == "x11" and host == "x11"
                         else None

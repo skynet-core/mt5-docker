@@ -1,0 +1,66 @@
+--- a/hw/xwayland/xwayland-input.c
++++ b/hw/xwayland/xwayland-input.c
+@@ -520,7 +520,7 @@
+     DeviceIntPtr dev = get_pointer_device(xwl_seat);
+     DeviceIntPtr master;
+     int i;
+-    int sx, sy;
++    double sx, sy;
+     int dx, dy;
+     ScreenPtr pScreen = xwl_screen->screen;
+     xwl_seat->pointer_enter_count++;
+@@ -539,13 +539,14 @@
+     if (!is_surface_from_xwl_window(surface))
+         return;
+ 
+-    sx = wl_fixed_to_int(sx_w) * xwl_screen->global_surface_scale;
+-    sy = wl_fixed_to_int(sy_w) * xwl_screen->global_surface_scale;
+-
+     xwl_seat->xwl_screen->serial = serial;
+     xwl_seat->pointer_enter_serial = serial;
+ 
+     xwl_seat->focus_window = wl_surface_get_user_data(surface);
++    sx = wl_fixed_to_double(sx_w) * xwl_screen->global_surface_scale *
++         xwl_seat->focus_window->viewport_scale_x;
++    sy = wl_fixed_to_double(sy_w) * xwl_screen->global_surface_scale *
++         xwl_seat->focus_window->viewport_scale_y;
+     dx = xwl_seat->focus_window->toplevel->drawable.x;
+     dy = xwl_seat->focus_window->toplevel->drawable.y;
+ 
+@@ -553,7 +554,7 @@
+     xwl_seat->last_focus_window = NULL;
+ 
+     master = GetMaster(dev, POINTER_OR_FLOAT);
+-    (*pScreen->SetCursorPosition) (dev, pScreen, dx + sx, dy + sy, TRUE);
++    (*pScreen->SetCursorPosition) (dev, pScreen, (int) (dx + sx), (int) (dy + sy), TRUE);
+ 
+     miPointerInvalidateSprite(master);
+     init_device_event(&enter, dev, currentTime.milliseconds, EVENT_SOURCE_FOCUS);
+@@ -669,12 +670,12 @@
+     ValuatorMask mask;
+     DeviceIntPtr device;
+     int flags;
+-    int event_x = wl_fixed_to_int(xwl_seat->pending_pointer_event.x);
+-    int event_y = wl_fixed_to_int(xwl_seat->pending_pointer_event.y);
++    double event_x = wl_fixed_to_double(xwl_seat->pending_pointer_event.x);
++    double event_y = wl_fixed_to_double(xwl_seat->pending_pointer_event.y);
+     int drawable_x = xwl_seat->focus_window->toplevel->drawable.x;
+     int drawable_y = xwl_seat->focus_window->toplevel->drawable.y;
+-    int x;
+-    int y;
++    double x;
++    double y;
+ 
+     event_x *= xwl_screen->global_surface_scale;
+     event_y *= xwl_screen->global_surface_scale;
+@@ -686,8 +687,8 @@
+     y = drawable_y + event_y;
+ 
+     valuator_mask_zero(&mask);
+-    valuator_mask_set(&mask, 0, x);
+-    valuator_mask_set(&mask, 1, y);
++    valuator_mask_set_double(&mask, 0, x);
++    valuator_mask_set_double(&mask, 1, y);
+ 
+     if (xwl_seat->pending_pointer_event.has_relative) {
+          flags = POINTER_ABSOLUTE | POINTER_SCREEN | POINTER_NORAW;

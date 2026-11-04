@@ -11,9 +11,11 @@ Four amd64 images extend the corresponding [`skynet-core/systemd`](https://githu
 
 The images install Wine, Microsoft's Evergreen WebView2 runtime, the official MT5 terminal/MetaEditor/Strategy Tester, and Windows Python for `mt5-mcp`. MT5 fills the display under KWin as the unprivileged `plasma` user. Wine uses X11, through Xwayland in Wayland sessions. Systemd remains PID 1. Plasma desktop applications and the desktop shell are omitted.
 
-The display runtime is vendored from [`skynet-core/kde-container` at `782714f`](https://github.com/skynet-core/kde-container/tree/782714fb841737b884ea263ada5108ae3754be85). Its native clipboard bridge, patched KRFB capture/input, GPU probe, software fallback, and scoped NVIDIA synchronization fix are retained. See [the source record](vendor/kde-container/UPSTREAM) for local changes.
+The display runtime comes from [kde-container](https://github.com/skynet-core/kde-container). Generic GPU, input, clipboard and framebuffer fixes are maintained there. The [source record](vendor/kde-container/UPSTREAM) pins the exact commit; [the source ledger](build/upstream-sources.json) and its offline test verify copied file contents and executable modes. MT5 retains its Wine setup, image packaging and application tests.
 
 See [Resolved challenges and root causes](#resolved-challenges-and-root-causes) for the installation, rendering, input and CI problems addressed during development.
+
+See [Known issues and image selection](KNOWN_ISSUES.md) for deferred issues, the latest per-image CI results and the suggested support baseline. No image passed the complete latest hosted validation; the failed run did not publish updated images.
 
 ## Setup
 
@@ -124,7 +126,7 @@ IMAGE_TAG=mt5:archlinux CONTAINER_NAME=mt5-archlinux MT5_VOLUME=mt5-archlinux-da
 
 ### Smaller Debian and Ubuntu builds
 
-Fedora and Arch use their distribution KWin. `KWIN_VARIANT=source` is the Debian/Ubuntu default. It compiles KWin 6.8.2, Qt 6.11.2 and the required KDE Frameworks 6.30 libraries from pinned archives. The first build needs substantial time, memory and disk; separate cached stages retain completed dependencies. KWin 6.8 is Wayland-only, so X11 modes use a separate compositor. See [build/KWIN.md](build/KWIN.md) for the source stack.
+Fedora and Arch use their distribution Wayland KWin and a separately built X11 compositor. `KWIN_VARIANT=source` is the Debian/Ubuntu default. It compiles KWin 6.8.2, Qt 6.11.2 and the required KDE Frameworks 6.30 libraries from pinned archives. The first build needs substantial time, memory and disk; separate cached stages retain completed dependencies. KWin 6.8 is Wayland-only, so X11 modes use a separate compositor. See [build/KWIN.md](build/KWIN.md) for the source stack.
 
 Use `KWIN_VARIANT=distro` to skip that stack and install the distribution's KWin instead. These examples use separate tags and volumes:
 
@@ -238,11 +240,15 @@ The launcher discovers the host Wayland/X11 socket and Xauthority cookie. `HOST_
 
 VNC passwords are limited to eight printable ASCII characters by the protocol. `VNC_PASSWORD_FILE` mounts a private password file. `VNC_PORT`, `WEB_PORT`, and `BIND_ADDRESS` control the host binding; the default address is `127.0.0.1`.
 
-The startup GPU probe tests EGL/GBM rendering on available devices; KWin selects its rendering GPU separately. `bin/mt5-run -e LIBGL_ALWAYS_SOFTWARE=1` requests Mesa software rendering. CPU regression tests also hide physical DRI devices before init: KWin/Wine can enumerate those devices even with this variable set.
+The startup GPU probe tests EGL/GBM rendering on available devices and prefers usable NVIDIA hardware. Wayland KWin receives the selected render node; NVIDIA X11 sessions use a private Xorg virtual screen without opening or switching the host's virtual terminals. `bin/mt5-run -e LIBGL_ALWAYS_SOFTWARE=1` requests Mesa software rendering. CPU regression tests also hide physical DRI devices before init: KWin/Wine can enumerate those devices even with this variable set.
 
-Docker native Wayland nesting automatically adds `--gpus all` when the host NVIDIA driver and NVIDIA Container Toolkit runtime are available. This supplies the driver libraries needed to exchange frames with an NVIDIA host compositor; access to an AMD GPU alone can otherwise leave the nested window black. Explicit GPU, runtime, CDI and software-rendering arguments take precedence. For other modes on an NVIDIA host configured with NVIDIA Container Toolkit, pass `--gpus all` to `bin/mt5-run`.
+The Docker launcher automatically adds `--gpus all` in every display mode and backend when the host NVIDIA driver and NVIDIA Container Toolkit runtime are available. This supplies NVIDIA's container driver libraries. Explicit GPU, runtime, CDI and software-rendering arguments take precedence.
 
-The nested NVIDIA fence fix is scoped to KWin; WebView2 uses software rendering. The Debian/Ubuntu source variant builds KWin 6.8.2 with a matching Qt/KF stack under `/opt/kwin-6.8.2`, enabling the normal GPU path in Wayland VNC/web modes. Debian's distro variant uses software capture for NVIDIA VNC/web with its older KWin. Native KRFB, clipboard helpers and kiosk applications retain their distro Qt libraries. Arch's removed X11 compositor is built separately from pinned KWin-X11 sources, with compilers excluded from the final image.
+Nested NVIDIA X11 sessions present their GPU desktop through an authenticated loopback viewer. On Wayland hosts, a separate KWin with compositing disabled manages the viewer inside a private rootful Xwayland surface. The main compositor renders on NVIDIA; frames are copied to the host window for presentation.
+
+The nested NVIDIA fence fix is scoped to KWin; WebView2 uses software rendering. The Debian/Ubuntu source variant builds KWin 6.8.2 with a matching Qt/KF stack under `/opt/kwin-6.8.2`, enabling the normal GPU path in Wayland VNC/web modes. Debian's distro variant uses software capture for NVIDIA VNC/web with its older KWin. Native KRFB, clipboard helpers and kiosk applications retain their distro Qt libraries. Fedora and Arch build the separate, namespaced KWin-X11 6.7.5 compositor, with compilers excluded from the final image. Their KWin 6.8 software sessions use the OpenGL capture path.
+
+MT5 startup installs `--disable-gpu` as the default `terminal64.exe` value under `HKLM\Software\Policies\Microsoft\Edge\WebView2\AdditionalBrowserArguments`, including in retained Wine volumes. Wine reports MT5 as a high-integrity host, so WebView2 ignores the former environment override. Without the effective policy, Chromium can fail to produce frames and Market windows show the charts behind them. An existing nonempty application policy is preserved; custom policies need to retain `--disable-gpu` for this browser workaround.
 
 ```sh
 # With IMAGE_TAG, CONTAINER_NAME and MT5_VOLUME selected as above:
@@ -316,7 +322,7 @@ uv run --locked python tests/validate.py --container mt5-fedora-44 --case fedora
 MT5_ENV_FILE="$PWD/.env" tests/matrix.sh
 ```
 
-The validator checks the exact account/server and downloaded history through `mt5-mcp`, compiles MT5's bundled `MQL5/Experts/Advisors/ExpertMACD.mq5` with MetaEditor, runs Strategy Tester with a unique report, and retrieves the chart screenshot, MT5 window screenshot, report, parsed statistics, compiler output and service/terminal/tester logs. It prints each evidence directory under `artifacts/`. Backtests use local agents with cloud and remote agents disabled. Custom experts under `expert/` are ignored by Git and are not required by tests.
+The validator checks the exact account/server and downloaded history through `mt5-mcp`, compiles MT5's bundled `MQL5/Experts/Advisors/ExpertMACD.mq5` with MetaEditor, runs Strategy Tester with a unique report, and retrieves the chart screenshot, MT5 window screenshot, report, parsed statistics, compiler output and service/terminal/tester logs. It prints each evidence directory under `artifacts/`. `--timeout` sets the budget for each history, screenshot, or report wait (600 seconds by default). Backtests use local agents with cloud and remote agents disabled. Custom experts under `expert/` are ignored by Git and are not required by tests.
 
 `tests/matrix.sh` runs all four images across both compositors and all four modes, authenticates VNC/web connections, and captures their remote framebuffer. Pass distro names to select images, for example `tests/matrix.sh fedora-44`. Nested cases require an available host display. The separate `tests/clipboard.py` exchanges text and PNG data with a disposable parent display, checks that its sockets belong to that parent, and saves bidirectional evidence without changing the user's clipboard.
 
@@ -341,10 +347,10 @@ Use the corresponding Dockerfile and tag for Debian, Ubuntu or Arch. The default
 Run the complete display matrix against the four production images with:
 
 ```sh
-# Build matching test tools without recompiling the private KWin stack.
+# Build matching test tools; cached stages reuse the private KWin stack.
 for distro in fedora-44 debian-13 ubuntu-26.04 archlinux; do
   docker build -f "Dockerfile.$distro" --target runtime-test \
-    --build-arg KWIN_VARIANT=distro -t "mt5:runtime-test-$distro" .
+    --build-arg KWIN_VARIANT=source -t "mt5:runtime-test-$distro" .
 done
 tests/display-matrix.sh
 ```
@@ -363,7 +369,7 @@ for distro in fedora-44 debian-13 ubuntu-26.04 archlinux; do
 done
 ```
 
-Evidence is under `artifacts/mt5-input/<distribution>/<backend>/<mode>/`, with `on-wayland/` or `on-x11/` below nested cases. It includes startup, keyboard, menu and final screenshots, expected/observed text, read-only GUI state, the last input phase and service/compositor logs. Web cases also retain a browser trace. `results.json` fails when any expected case or input assertion fails. Add `--gpu` for a separate NVIDIA hardware run; Wayland uses NVIDIA while the X11/Xvfb profiles use llvmpipe. Standard CI hides physical DRI devices inside the test namespace to exercise software rendering. Both tiers hide host audio, input and USB devices before init.
+Evidence is under `artifacts/mt5-input/<distribution>/<backend>/<mode>/`, with `on-wayland/` or `on-x11/` below nested cases. It includes startup, keyboard, menu and final screenshots, expected/observed text, read-only GUI state, the last input phase and service/compositor logs. Web cases also retain a browser trace. `results.json` fails when any expected case or input assertion fails. Add `--gpu` for a separate hardware run: the EGL probe and actual compositor renderer must prove hardware rendering, and usable NVIDIA hardware must be selected when present. Software fallback fails this tier. Standard CI hides physical DRI devices inside the test namespace to exercise software rendering. Both tiers hide host audio, input and USB devices before init.
 
 The startup regression repeats these profiles with `--startup autologin`. It uses a dummy login on an internal network, so the terminal skips the company-selection dialog without reaching a broker. That dialog previously refreshed Wine's window geometry and hid an offset in the first chart click. A test expert draws flat colored targets; the test locates them in screenshots and checks their actual MT5 chart-local click coordinates and object names. Compilation runs in a separate disposable container before the tested session starts. No menu, dialog or MetaEditor window may repair the tested session before its first chart click.
 
@@ -390,6 +396,18 @@ done
 ```
 
 Results, coordinate comparisons, cursor captures and per-case logs are saved under `artifacts/pointer-matrix/<distribution>/scale-<percent>/<backend>/nested/on-<transport>/`. CI requires both the eight GUI profiles and all twelve scaled profiles before publishing each image. The native tests also exercise the Wayland enter-and-click sequence over a real private protocol connection, including the failing behavior without the compatibility fix.
+
+The Market rendering suite adds ten profiles per image, including genuine headless capture. It selects Market through the Navigator tree with real input, then checks initial painting, resizing and closing/reopening. Browser DOM, paint events and animation frames must be present, and Chromium's screenshot must agree with the native browser window, compositor output and visible transport pixels. Blank windows and charts showing through fail the gate. Diagnostic browser flags bind only inside the disposable test container; the test never supplies the production `--disable-gpu` workaround itself.
+
+```sh
+for distro in fedora-44 debian-13 ubuntu-26.04 archlinux; do
+  uv run --locked python tests/mt5_market.py \
+    --image "mt5:$distro" --parent-image "mt5:runtime-test-$distro" \
+    --case "$distro" --output artifacts/mt5-market
+done
+```
+
+CI requires these ten Market profiles before publishing and retains their screenshots and browser/compositor diagnostics. Headless cases activate the page through their private X11 backing display or native Wine input, with VNC/web services inactive. Add `--gpu` for hardware validation; Debian/Ubuntu production and parent fixture images must use the source KWin variant for this tier.
 
 CI also repeats all twelve scaled profiles with `--startup autologin`, retaining their evidence under `artifacts/autologin-pointer-matrix/`. The two startup variants add twenty profiles per image. Their expert, compiler output, input CSV and screenshots remain test artifacts and add no dependencies to the published runtime.
 
@@ -475,9 +493,9 @@ Required: **94% for every executable source file**. Branch coverage is available
 </details>
 <!-- coverage-report:end -->
 
-CI requires **at least 94% executable-line coverage for each maintained Python, C++ and Bash source file**, including test code, helpers, extensionless scripts and maintained code under `vendor/kde-container`. An uncovered file fails even if the repository average is high. Python and C++ branch coverage is reported separately. Fetched dependencies and generated compiler output are outside the maintained-source inventory.
+CI requires **at least 94% executable-line coverage for each maintained application and build source file**, including helpers, extensionless scripts and maintained code under `vendor/kde-container`. An uncovered file fails even if the repository average is high. Test sources, `ui-fixture.cpp` and `vnc-benchmark.cpp` are linted but excluded from this coverage gate. Python and C++ branch coverage is reported separately. Fetched dependencies and generated compiler output are outside the maintained-source inventory.
 
-Python uses `coverage.py`, native tests compile the actual C++ with GCC coverage, and Bash uses `shfmt` command locations plus a metadata-only DEBUG trace. The shell trace records source paths and line numbers; it does not record commands, environment values or credentials. Source hashes reject coverage from changed revisions. The declaration-only `tests/native/fake-wayland.h` is listed as N/A with its compiler audit and an exact source hash; edits require re-audit and cannot silently inherit that classification.
+Python uses `coverage.py`, native tests compile the actual C++ with GCC coverage, and Bash uses `shfmt` command locations plus a metadata-only DEBUG trace. The shell trace records source paths and line numbers; it does not record commands, environment values or credentials. Source hashes reject coverage from changed revisions.
 
 ```sh
 go install mvdan.cc/sh/v3/cmd/shfmt@v3.14.1
@@ -537,7 +555,7 @@ This summary records confirmed causes and implemented corrections. Several sympt
 | WebView2 installation fails or leaves a build apparently complete | Its x64 bootstrapper is itself 32-bit. Cold Wine RPC/service startup and leftover updater processes also interfere with installers; status alone does not establish that the runtime exists. | Enable the required i386/WoW64 support, keep bootstrap services alive, stop stale Wine service graphs between installers, allow one clean WebView2 retry, and require an accepted status plus a nonempty installed payload. Verify terminal, editor and tester payloads too. See [the installer](build/install-mt5). |
 | Linux dependency resolution or Dependabot reports no compatible MetaTrader5 wheel | The native SDK supplies Windows wheels. Linux-only requirements generation could also drop the dependencies needed inside Wine. | Keep the Windows platform marker in the input and compiled requirements, compile with `--universal`, and check universal/Linux/Windows resolution separately. Windows Python still installs and imports the real SDK; Linux development does not install its Windows extension. |
 | Windows numerical dependencies fail to import on legacy Wine 10.0 | Its UCRT implementation lacks complex-math exports used by NumPy/SciPy wheels. | Retain a checksum-verified UCRT fallback scoped to `python.exe` for that legacy path, and run actual Windows import/numerical checks during the build. Current Debian/Ubuntu images use Wine 11.20 for MT5 compatibility. |
-| An MCP listener exists but terminal queries fail or hit unexpected rate limits | In the validated `mt5-mcp==0.6.3`/SDK combination, IPC tools bind to a single thread, and their CLI registers worker-thread tools and initializes the ASGI application with the default rate limit before applying parsed CLI settings. Running a blocking IPC call on the event loop starves the whole HTTP server while the terminal is unreachable. | [The package launcher](libexec/mt5-mcp) pins those tools to one dedicated worker thread off the loop (concurrent calls fail fast instead of queueing) and explicitly configures rate limiting. Acceptance requires a real MCP handshake and connected-terminal query, not just an open port. |
+| An MCP listener exists but terminal queries fail or hit unexpected rate limits | In the validated `mt5-mcp==0.6.3`/SDK combination, IPC tools bind to a single thread, and their CLI registers worker-thread tools and initializes the ASGI application with the default rate limit before applying parsed CLI settings. Running a blocking IPC call on the event loop starves the whole HTTP server while the terminal is unreachable. | [The package launcher](libexec/mt5-mcp) runs those tools on one thread in a dedicated worker process (concurrent calls fail fast instead of queueing) and explicitly configures rate limiting. Acceptance requires a real MCP handshake and connected-terminal query, not just an open port. |
 | A fresh prefix cannot resolve `ICMarketsEU-Demo` by name | The generic MT5 installation lacks that broker's public server definitions. | Seed the public, checksum-recorded `servers.dat` exported from a credential-free broker installation. Keep account credentials separate; custom brokers can supply their address or public definitions. See [broker provenance](config/mt5/UPSTREAM). |
 | Broker validation uses a placeholder or changes prefix ownership between modes | CI could receive the literal `MT5_SERVER` placeholder; inconsistent UID/GID settings could make a reused Wine volume inaccessible. | Validate account/server settings, resolve only that known placeholder to the confirmed broker, preserve custom servers, and use one prefix owner across the matrix. Fail missing credentials before expensive publishing builds. |
 | Quoted passwords or account files behave differently between launch methods | Shell expansion, INI encoding, file ownership and existing volume contents differ from ordinary command-line strings. | Use dotenv parsing through `uv`, write a private UTF-16 MT5 INI, mount custom INIs read-only and pass credentials only at runtime. Separate image/account volumes; pulling an image does not replace applications in an existing prefix. |
@@ -558,11 +576,11 @@ This summary records confirmed causes and implemented corrections. Several sympt
 | Debian software nested mode produces a black frame and MT5 repeatedly exits 69 | Wayland-on-X11 software nesting creates a KRFB monitor, but Wine launched while output configuration removed another output. Wine received `BadRROutput` / `RRGetOutputInfo`. | [The kiosk supervisor](vendor/kde-container/libexec/plasma-target-app) now waits for the same bounded remote-monitor readiness used by VNC/web before launching software-nested applications. Commit `222c6ed` and controlled delayed-monitor tests cover the startup order. |
 | Copy/paste fails across independent nested sessions or transfers strange X11 data | Display sockets do not bridge clipboard ownership. Portal transfer keys, X11 atoms and selection-negotiation targets belong to their original session/server. | Use the bidirectional Wayland/X11 relay, prefer `ext_data_control_v1`, fall back to `wlr-data-control`, and filter portal-local keys plus `TARGETS`, `MULTIPLE`, `TIMESTAMP` and `SAVE_TARGETS`. Weston fallback also mounts its Xwayland socket. |
 | Older Debian GPU remote capture fails; upgrading KWin introduces library/protocol conflicts | KWin 6.3's NVIDIA capture path needs a fallback. KWin 6.8 requires newer Qt/KF and changes the output-device registry protocol. | Build KWin 6.8.2 with its matching stack under `/opt/kwin-6.8.2`; scope private paths to KWin and matching KScreen. Keep applications/KRFB/clipboard helpers on distro Qt. Retain software capture for the older distro variant. |
-| X11 sessions disappear from current Arch packages | Its repositories no longer supply `kwin-x11`; KWin 6.8 is Wayland-only. | Build the separate pinned, namespaced KWin-X11 release and omit compilers from the final image. Debian/Ubuntu also retain their separate X11 compositor. |
+| X11 sessions fail after a Fedora or Arch KWin update | KWin 6.8 is Wayland-only. Arch removed the X11 package, and Fedora conflicts with its older X11 RPM. | The image builds the separate pinned, namespaced KWin-X11 release and omits compilers from the final image. Debian/Ubuntu retain their separate X11 compositor. |
 | A minimal kiosk crashes during Qt theme initialization or cannot find compositor services | The built-in KDE theme expects optional integration packages; bypassing normal Plasma startup also skips service-cache preparation. | Use Qt's generic theme for kiosk clients and build the appropriately scoped KDE service cache without adding the full desktop shell. |
 | A crashed compositor stays down despite restart settings | KWin's wrapper may return zero after exhausting its own crash retries. | Restart the session after successful exits too; an explicit systemd stop still stops it. |
 | VNC crashes when a client requests pixels before the first captured frame | KRFB advertised dimensions before allocating its framebuffer; PipeWire had not delivered a frame yet. | Allocate and initialize the framebuffer before publishing it. A startup regression pauses capture and requests pixels before resuming the real window. |
-| Headless screenshots or nested Wayland fail on GPU-less runners | Older QPainter sessions lack ScreenShot2; direct KWin 6.8 X11 nesting requires DRI3 unavailable on CPU-only hosts. | Capture the actual private Xvfb-backed output where required. For software nesting on X11, use an authenticated loopback RFB viewer while KWin remains the compositor. Preserve the clipboard relay and copy only needed viewer libraries into the runtime. |
+| Headless screenshots or nested Wayland fail on GPU-less runners | Older QPainter sessions lack ScreenShot2; direct KWin 6.8 X11 nesting requires DRI3 unavailable on CPU-only hosts. | Capture the actual private Xvfb-backed output where required. Source-stack Wayland nesting uses an authenticated private SHM Xwayland frontend and lossless loopback viewer while KWin remains the compositor. The frontend negotiates host scale and decorations; the clipboard relay remains active. Copy only required viewer/frontend libraries into the runtime. |
 
 Disabling `CLIPBOARD_SYNC` helped one reported Fedora comparison, but that alone did not establish the cause of its click failures. The confirmed clipboard and coordinate fixes above have separate regression evidence. Clipboard sharing also does not imply support for cross-session drag-and-drop.
 
@@ -588,4 +606,4 @@ Disabling `CLIPBOARD_SYNC` helped one reported Fedora comparison, but that alone
 | Concurrent or failed CI runs publish unverified images | Rebuilding after tests changes the image being published; outdated runs can overlap newer commits. | Supersede stale branch runs, gate publication on all acceptance tests, retag the tested image instead of rebuilding, and verify both mutable and commit-specific registry tags against its configuration digest. |
 | A public coverage site or README update becomes stale, exposes raw logs or triggers another build loop | Cross-workflow artifacts, concurrent branch edits and generated documentation commits need explicit boundaries. | Accept only successful trusted default-branch runs; check artifact digests and report schema; allowlist static assets. Deploy Pages, then update only README coverage markers with bounded non-force retries. Built-in-token commits use `[skip ci]`. |
 
-The final [image workflow](https://github.com/skynet-core/mt5-docker/actions/runs/40967817657) and [coverage workflow](https://github.com/skynet-core/mt5-docker/actions/runs/40986172562) passed. Their retained artifacts contain profile-level logs, screenshots, measurements and report provenance. The local evidence paths and hardware scope are listed in [Recorded acceptance](#recorded-acceptance).
+The historical [image workflow](https://github.com/skynet-core/mt5-docker/actions/runs/40967817657) and [coverage workflow](https://github.com/skynet-core/mt5-docker/actions/runs/40986172562) passed. Their retained artifacts contain profile-level logs, screenshots, measurements and report provenance. The local evidence paths and hardware scope are listed in [Recorded acceptance](#recorded-acceptance).

@@ -223,7 +223,7 @@ class GpuProbeTests(unittest.TestCase):
         for devices, status in (
             ([], 1),
             ([{"hardware": False}], 1),
-            ([{"hardware": True}], 0),
+            ([{"device": "/private/gpu", "hardware": True}], 0),
         ):
             with (
                 self.subTest(devices=devices),
@@ -238,9 +238,26 @@ class GpuProbeTests(unittest.TestCase):
                 patch.object(
                     sys, "argv", ["probe", "--requires-software", "wayland", "vnc"]
                 ),
-                patch.object(GPU, "requires_software", return_value=required),
+                patch.object(sys, "stdin", io.StringIO('{"selected": null}')),
+                patch.object(GPU, "requires_software", return_value=required) as policy,
             ):
                 self.assertEqual(GPU.main(), 0 if required else 1)
+                policy.assert_called_once_with("wayland", "vnc", None)
+
+    def test_gpu_selection_prefers_usable_nvidia_and_keeps_device_identity(self):
+        amd = {"device": "/dev/dri/renderD129", "hardware": True, "vendor": "AMD"}
+        nvidia = {"device": "/dev/dri/renderD128", "hardware": True, "vendor": "NVIDIA"}
+        with (
+            patch.object(Path, "glob", return_value=[Path("/sys/card1")]),
+            patch.object(Path, "resolve", return_value=Path("/sys/0000:01:00.0")),
+        ):
+            selected = GPU.select_device([amd, nvidia])
+        self.assertEqual(selected["device"], nvidia["device"])
+        self.assertEqual(selected["card"], "/dev/dri/card1")
+        self.assertEqual(selected["pci_bus_id"], "PCI:1@0:0:0")
+        self.assertNotIn("pci_bus_id", nvidia)
+        self.assertIsNone(GPU.select_device([{"hardware": False}]))
+        self.assertEqual(GPU.select_device([amd])["device"], amd["device"])
 
 
 class RemoteOutputTests(unittest.TestCase):
@@ -303,6 +320,34 @@ class RemoteOutputTests(unittest.TestCase):
         ):
             runpy.run_path(str(source), run_name="__main__")
         return [call.args[0] for call in run.call_args_list]
+
+    def test_prepare_entrypoint_preserves_frontend_failure_and_existing_deadline(self):
+        source = ROOT / "vendor/kde-container/libexec/plasma-remote-output"
+        for scaled, expected in ((False, 0), (True, "private frontend unavailable")):
+            with (
+                self.subTest(scaled=scaled),
+                patch.dict(
+                    os.environ,
+                    {
+                        "DISPLAY_BACKEND": "wayland",
+                        "DISPLAY_MODE": "nested" if scaled else "headless",
+                        "HOST_DISPLAY_BACKEND": "wayland",
+                        "PLASMA_SOFTWARE_NESTED": "1",
+                    },
+                    clear=True,
+                ),
+                patch.object(sys, "argv", [str(source), "--prepare"]),
+                patch(
+                    "ctypes.CDLL", side_effect=OSError("private frontend unavailable")
+                ) as library,
+                patch("time.monotonic", side_effect=[0, 61]),
+                patch("time.sleep") as sleep,
+                self.assertRaises(SystemExit) as result,
+            ):
+                runpy.run_path(str(source), run_name="__main__")
+            self.assertEqual(result.exception.code, expected)
+            self.assertEqual(library.call_count, int(scaled))
+            sleep.assert_not_called()
 
     def test_configuration_activates_remote_origin_and_disables_only_other_active_outputs(
         self,

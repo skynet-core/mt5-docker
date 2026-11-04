@@ -38,8 +38,10 @@ class SourceIdentityTests(unittest.TestCase):
                 "host-env": "# /// script\nprint(1)\n",
                 "script": "#!/bin/bash\ntrue\n",
                 "native.cpp": "int main() {return 0;}\n",
+                "native.c": "int main(void) {return 0;}\n",
                 "tests/test_source.py": "assert True\n",
                 "tests/helper.sh": "#!/bin/bash\ntrue\n",
+                "vendor/kde-container/test/helper.c": "int test(void) {return 0;}\n",
                 "vendor/kde-container/test/helper.cpp": "int test() {return 0;}\n",
                 "vendor/kde-container/native/ui-fixture.cpp": "int main() {return 0;}\n",
                 "vendor/kde-container/native/vnc-benchmark.cpp": "int main() {return 0;}\n",
@@ -59,6 +61,7 @@ class SourceIdentityTests(unittest.TestCase):
                     "host-env": "python",
                     "script": "shell",
                     "native.cpp": "c++",
+                    "native.c": "c",
                 },
             )
             before = REPORT.manifest(root)
@@ -182,6 +185,31 @@ class PythonEvidenceTests(unittest.TestCase):
 
 
 class NativeEvidenceTests(unittest.TestCase):
+    def test_unsupported_production_c_stays_unmeasured_and_fails_the_same_minimum(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "native.c").write_text("int value(void) {return 1;}\n")
+            path = root / "native.json"
+            path.write_text(
+                json.dumps(
+                    {
+                        "files": [
+                            {
+                                "file": "native.c",
+                                "lines": [{"line_number": 1, "count": 1}],
+                            }
+                        ]
+                    }
+                )
+            )
+            owned = {"native.c": "c"}
+            metrics = REPORT.native_metrics([path], root, owned=owned)
+            report = REPORT.evaluate(owned, metrics, root)
+            self.assertEqual(metrics, {})
+            self.assertEqual(report["minimum_per_file"], 94)
+            self.assertFalse(report["passed"])
+            self.assertFalse(report["files"][0]["measured"])
+
     def test_native_reports_merge_owned_sources_and_ignore_external_code(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

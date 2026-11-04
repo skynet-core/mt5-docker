@@ -316,36 +316,169 @@ class ShellRuntimeTests(unittest.TestCase):
                     self.assertEqual(environment["DISPLAY"], ":41")
 
     def test_software_parent_stays_private_and_disables_tcp(self):
-        result, commands, _, _ = self.run_source(RUNTIME / "plasma-software-display")
+        result, commands, _, _ = self.run_source(
+            RUNTIME / "plasma-software-display",
+            environment={"PLASMA_SOFTWARE_CAPTURE": "1"},
+        )
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(commands[-1][:2], ["/usr/bin/Xvfb", ":110"])
         self.assertIn("800x600x24", commands[-1])
         self.assertIn("-nolisten", commands[-1])
+        result, commands, _, _ = self.run_source(RUNTIME / "plasma-software-display")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            commands[-1], ["/usr/local/libexec/plasma-nested-x11", "--display"]
+        )
+        result, commands, _, _ = self.run_source(
+            RUNTIME / "plasma-nested-x11", arguments=("--display",)
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            commands[-1][:2], ["/usr/local/libexec/plasma-xwayland", ":110"]
+        )
+        for flag in ("-auth", "-nolisten", "-shm", "-decorate", "-hidpi"):
+            self.assertIn(flag, commands[-1])
+        self.assertIn("800x600", commands[-1])
+        self.assertEqual(commands[-1][commands[-1].index("-nolisten") + 1], "tcp")
+        for capture, host, expected in (
+            ("1", "x11", 0),
+            ("0", "wayland", 0),
+            ("0", "x11", 1),
+        ):
+            with self.subTest(capture=capture, host=host):
+                result, commands, _, _ = self.run_source(
+                    RUNTIME / "plasma-software-display",
+                    arguments=("--check",),
+                    environment={
+                        "PLASMA_SOFTWARE_CAPTURE": capture,
+                        "DISPLAY_MODE": "nested",
+                        "HOST_DISPLAY_BACKEND": host,
+                        "PLASMA_SOFTWARE_NESTED": "1",
+                    },
+                )
+                self.assertEqual(result.returncode, expected, result.stderr)
+                self.assertEqual(commands, [])
+
+    def test_nvidia_xorg_uses_a_private_virtual_screen_without_host_vt_access(self):
+        def setup(root):
+            for name in (
+                "lib/Xorg",
+                "lib/xorg/modules/drivers/nvidia_drv.so",
+                "lib/nvidia/xorg/libglxserver_nvidia.so",
+            ):
+                path = root / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(
+                    "#!/bin/sh\nprintf '%s\\n' /private/default-modules >&2\n"
+                )
+                path.chmod(0o755)
+
+        result, commands, _, files = self.run_source(
+            RUNTIME / "plasma-xserver",
+            setup=setup,
+            replacements=(("/usr/lib64", "lib64"), ("/usr/lib", "lib")),
+            before='mkdir -p "$TEST_ROOT/lib64"\n',
+            environment={
+                "DISPLAY_MODE": "headless",
+                "PLASMA_NVIDIA_BUS_ID": "PCI:1@0:0:0",
+            },
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(commands[-1][0].endswith("/lib/Xorg"))
+        self.assertIn("-seat", commands[-1])
+        self.assertIn("plasma-container", commands[-1])
+        self.assertIn("-novtswitch", commands[-1])
+        self.assertIn("-sharevts", commands[-1])
+        self.assertIn("-nolisten", commands[-1])
+        config = files["nvidia-xorg.conf"].decode()
+        self.assertIn('BusID "PCI:1@0:0:0"', config)
+        self.assertIn('Option "UseDisplayDevice" "None"', config)
+        self.assertIn("Virtual 800 600", config)
+        self.assertIn('/private/default-modules"', config)
+
+    def test_nvidia_xorg_rejects_invalid_bus_ids_and_missing_server_modules(self):
+        for bus, message in (
+            ("invalid; unsafe", ""),
+            ("PCI:1@0:0:0", "requires the Xorg"),
+        ):
+            with self.subTest(bus=bus):
+                result, commands, _, _ = self.run_source(
+                    RUNTIME / "plasma-xserver",
+                    replacements=(("/usr/lib64", "lib64"), ("/usr/lib", "lib")),
+                    before='mkdir -p "$TEST_ROOT/lib" "$TEST_ROOT/lib64"\n',
+                    environment={"PLASMA_NVIDIA_BUS_ID": bus},
+                )
+                self.assertEqual(result.returncode, 1)
+                self.assertIn(message, result.stderr)
+                self.assertFalse(
+                    any(command[0].endswith("Xorg") for command in commands)
+                )
 
     def test_vnc_native_and_software_capture_use_different_input_paths(self):
-        for backend, software in (("wayland", "0"), ("wayland", "1"), ("x11", "0")):
-            with self.subTest(backend=backend, software=software):
+        def setup(root):
+            helper = root / "remote-output"
+            helper.write_text(
+                '#!/bin/sh\n[ "$1" = --scale ] || exit 1\nprintf "1.25\\n"\n'
+            )
+            helper.chmod(0o755)
+
+        for backend, software, relay in (
+            ("wayland", "0", "0"),
+            ("wayland", "0", "1"),
+            ("wayland", "1", "0"),
+            ("wayland", "1", "1"),
+            ("x11", "0", "0"),
+        ):
+            with self.subTest(backend=backend, software=software, relay=relay):
                 result, commands, environment, _ = self.run_source(
                     RUNTIME / "plasma-vnc",
+                    setup=setup,
+                    replacements=(
+                        ("/usr/local/libexec/plasma-remote-output", "remote-output"),
+                    ),
                     environment={
                         "DISPLAY_BACKEND": backend,
                         "PLASMA_SOFTWARE_CAPTURE": software,
+                        "PLASMA_SOFTWARE_NESTED": relay,
+                        "PLASMA_NVIDIA_NESTED": "1" if backend == "x11" else "0",
                     },
-                    before="cat() { printf 'testpass'; }\n",
+                    before="cat() { printf 'testpass'; }\n"
+                    "LD_PRELOAD=/caller/preload.so\n",
                 )
                 self.assertEqual(result.returncode, 0, result.stderr)
                 if backend == "wayland" and software == "0":
                     self.assertEqual(commands[-1][0], "/usr/bin/krfb-virtualmonitor")
                     self.assertEqual(environment["PLASMA_KWIN_INPUT"], "1")
                     self.assertIn("800x600", commands[-1])
+                    self.assertEqual(
+                        commands[-1][commands[-1].index("--scale") + 1], "1.25"
+                    )
+                    self.assertEqual(environment["LD_PRELOAD"], "/caller/preload.so")
+                    self.assertNotIn("-no6", commands[-1])
+                    self.assertNotIn("-rfbportv6", commands[-1])
+                    self.assertNotIn("-nolookup", commands[-1])
                 else:
                     self.assertEqual(commands[-1][0], "/usr/bin/x11vnc")
+                    self.assertIn("-nolookup", commands[-1])
                     self.assertIn("17", commands[-1])
+                    self.assertEqual(
+                        environment["LD_PRELOAD"],
+                        "/usr/local/lib/plasma6/xtest-paced.so:/caller/preload.so",
+                    )
                     if software == "1":
                         self.assertEqual(environment["DISPLAY"], ":110")
                         self.assertNotIn("WAYLAND_DISPLAY", environment)
                         self.assertIn("-nomodtweak", commands[-1])
-                        self.assertIn("xtest-paced.so", environment["LD_PRELOAD"])
+                    self.assertEqual(
+                        "-localhost" in commands[-1], backend == "x11" or relay == "1"
+                    )
+                    self.assertEqual("-no6" in commands[-1], relay == "1")
+                    if relay == "1":
+                        self.assertEqual(
+                            commands[-1][commands[-1].index("-rfbportv6") + 1], "-1"
+                        )
+                    else:
+                        self.assertNotIn("-rfbportv6", commands[-1])
 
     def test_kiosk_and_desktop_sessions_keep_their_supported_entrypoints(self):
         def setup(root):
@@ -458,7 +591,8 @@ class ShellRuntimeTests(unittest.TestCase):
             )
             helper.chmod(0o755)
 
-        before = r"""exec() {
+        before = r"""wine() { record wine "$@"; cat >/dev/null; }
+exec() {
 record "$@"
 python3 -c 'import os,stat; assert stat.S_IMODE(os.stat(os.environ["TEST_ROOT"]+"/mt5-environment.json").st_mode)==0o600'
 exit 0
@@ -476,7 +610,9 @@ exit 0
             environment={"MT5_PASSWORD": "never-publish-this"},
         )
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(commands[0], ["dpi"])
+        self.assertEqual(
+            commands[:2], [["wine", r"C:\Python\python.exe", "-"], ["dpi"]]
+        )
         self.assertEqual(
             commands[-1],
             [
@@ -527,7 +663,7 @@ json.dump = checked_dump
                 result, _, _, files = self.run_source(
                     ROOT / "bin/mt5-launch",
                     setup=setup,
-                    before='export PYTHONPATH="$TEST_ROOT"\n',
+                    before='wine() { cat >/dev/null; }\nexport PYTHONPATH="$TEST_ROOT"\n',
                     replacements=(
                         ("/home/plasma/.wine", "prefix"),
                         ("/run/plasma/mt5-environment.json", "mt5-environment.json"),
@@ -548,6 +684,7 @@ json.dump = checked_dump
 
         result, commands, _, files = self.run_source(
             ROOT / "bin/mt5-launch",
+            before='wine() { record wine "$@"; cat >/dev/null; }\n',
             setup=setup,
             replacements=(
                 ("/usr/local/libexec/mt5-dpi", "dpi"),
@@ -555,7 +692,7 @@ json.dump = checked_dump
             ),
         )
         self.assertEqual(result.returncode, 37, result.stderr)
-        self.assertEqual(commands, [["dpi"]])
+        self.assertEqual(commands, [["wine", r"C:\Python\python.exe", "-"], ["dpi"]])
         self.assertNotIn("mt5-environment.json", files)
 
     def test_mt5_host_arguments_preserve_private_configuration_and_secret_names(self):
@@ -647,25 +784,105 @@ json.dump = checked_dump
                 '#!/bin/bash\nprintf "%s\\n" "$TEST_VIEWER_HELP"\nexit "${TEST_HELP_STATUS:-0}"\n'
             )
             viewer.chmod(0o755)
+            for name in ("nested-server", "wait"):
+                helper = root / name
+                helper.write_text(
+                    f'#!/bin/bash\nrecord {name} "$@" "$DBUS_SESSION_BUS_ADDRESS"\n'
+                )
+                helper.chmod(0o755)
 
-        for help_text, status, option in (
-            ("ShortcutModifiers", 0, "-ShortcutModifiers="),
-            ("MenuKey", 1, "-MenuKey="),
+        for help_text, status, option, host, capture in (
+            ("ShortcutModifiers", 0, "-ShortcutModifiers=", "x11", "0"),
+            ("MenuKey", 1, "-MenuKey=", "wayland", "0"),
+            ("MenuKey", 1, "-MenuKey=", "wayland", "1"),
         ):
             result, commands, environment, _ = self.run_source(
                 RUNTIME / "plasma-nested-x11",
                 setup=setup,
-                replacements=(("/usr/bin/vncviewer", "viewer"),),
+                replacements=(
+                    ("/usr/bin/vncviewer", "viewer"),
+                    ("/usr/bin/Xwayland", "nested-server"),
+                    ("/usr/local/libexec/plasma-wait", "wait"),
+                ),
                 environment={
                     "TEST_VIEWER_HELP": help_text,
                     "TEST_HELP_STATUS": str(status),
+                    "HOST_DISPLAY_BACKEND": host,
+                    "PLASMA_SOFTWARE_CAPTURE": capture,
+                    "DBUS_SESSION_BUS_ADDRESS": "unix:path=/test-guest-bus",
                 },
             )
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn(option, commands[-1])
+            self.assertEqual(commands[-1].count("-NoJPEG=1"), 1)
             self.assertIn("-AcceptClipboard=0", commands[-1])
             self.assertIn("-SendClipboard=0", commands[-1])
-            self.assertNotIn("WAYLAND_DISPLAY", environment)
+            if host == "x11":
+                self.assertNotIn("WAYLAND_DISPLAY", environment)
+                self.assertEqual(environment["DISPLAY"], "unix/:41")
+            else:
+                waits = [command for command in commands if command[0] == "wait"]
+                self.assertTrue(waits)
+                for wait in waits:
+                    self.assertEqual(wait[-1], "unix:path=/test-guest-bus")
+                self.assertEqual(commands[-1][0:2], ["dbus-run-session", "--"])
+                self.assertIn("--present", commands[-1])
+                display = ":100" if capture == "1" else ":110"
+                self.assertEqual(environment["DISPLAY"], display)
+                self.assertTrue(environment["WAYLAND_DISPLAY"].endswith("host-wayland"))
+                self.assertIn("-FullScreen=1", commands[-1])
+                server = next(
+                    command for command in commands if command[0] == "nested-server"
+                )
+                self.assertEqual(server[1], display)
+                self.assertEqual(server[2:4], ["-auth", environment["XAUTHORITY"]])
+                self.assertEqual(server[-1], "unix:path=/dev/null")
+
+    def test_nested_presentation_scopes_its_wm_and_stops_both_children(self):
+        def setup(root):
+            for name in ("ready", "viewer-ready", "blocked"):
+                os.mkfifo(root / name)
+            programs = {
+                "wait": 'record wait "$@" "$DBUS_SESSION_BUS_ADDRESS"\nread -r ready <"$TEST_ROOT/ready"\n',
+                "kwin": 'record compositor "$KWIN_COMPOSE" "$DBUS_SESSION_BUS_ADDRESS"\ntrap \'printf stopped > "$TEST_ROOT/compositor-stopped"; exit 0\' TERM\nprintf "%s\\n" ready > "$TEST_ROOT/ready"\nif [[ $TEST_FIRST == compositor ]]; then read -r ready <"$TEST_ROOT/viewer-ready"; exit 7; fi\nunset -f exec\nexec 3<>"$TEST_ROOT/blocked"\nread -r -t 10 -u 3 unused || :\n',
+                "viewer": 'record viewer "${KWIN_COMPOSE:-unset}"\ntrap \'printf stopped > "$TEST_ROOT/viewer-stopped"; exit 0\' TERM\nif [[ $TEST_FIRST == viewer ]]; then exit 7; fi\nprintf "%s\\n" ready > "$TEST_ROOT/viewer-ready"\nunset -f exec\nexec 3<>"$TEST_ROOT/blocked"\nread -r -t 10 -u 3 unused || :\n',
+            }
+            for name, body in programs.items():
+                path = root / name
+                path.write_text("#!/bin/bash\n" + body)
+                path.chmod(0o755)
+
+        for first in ("viewer", "compositor"):
+            with self.subTest(first=first):
+                result, commands, _, files = self.run_source(
+                    RUNTIME / "plasma-nested-x11",
+                    setup=setup,
+                    replacements=(
+                        ("/usr/local/libexec/plasma-wait", "wait"),
+                        ("/usr/bin/kwin_x11", "kwin"),
+                    ),
+                    environment={
+                        "TEST_FIRST": first,
+                        "KWIN_COMPOSE": "application-default",
+                        "DBUS_SESSION_BUS_ADDRESS": "unix:path=/private-presentation",
+                    },
+                    arguments=(
+                        "--present",
+                        "/bin/bash",
+                        "-c",
+                        'unset -f exec; exec "$TEST_ROOT/viewer"',
+                    ),
+                )
+                self.assertEqual(result.returncode, 7, result.stderr)
+                self.assertIn(
+                    ["compositor", "N", "unix:path=/private-presentation"], commands
+                )
+                self.assertIn(
+                    ["wait", "compositor", "unix:path=/private-presentation"], commands
+                )
+                self.assertIn(["viewer", "application-default"], commands)
+                stopped = "compositor" if first == "viewer" else "viewer"
+                self.assertEqual(files[stopped + "-stopped"], b"stopped")
 
     def test_kwin_adapter_aliases_sockets_and_selects_native_or_backing_outputs(self):
         def setup(root):
@@ -677,6 +894,7 @@ json.dump = checked_dump
             ("nested", "wayland", "0", "0", "0", "--wayland-display"),
             ("nested", "x11", "0", "0", "0", "--x11-display"),
             ("nested", "x11", "0", "1", "0", "--virtual"),
+            ("nested", "wayland", "1", "1", "0", "--x11-display"),
             ("headless", "none", "1", "0", "0", "--x11-display"),
             ("headless", "none", "0", "0", "1", "--virtual"),
         ):
@@ -700,6 +918,11 @@ json.dump = checked_dump
                 self.assertEqual(commands[-1][0], "/synthetic/private/kwin")
                 self.assertIn(expected, commands[-1])
                 self.assertNotIn("--no-lockscreen", commands[-1])
+                if software == "1":
+                    self.assertEqual(
+                        commands[-1][commands[-1].index("--x11-display") + 1], ":110"
+                    )
+                    self.assertIn(["wait", "x11"], commands)
                 if nvidia == "1":
                     self.assertIn(
                         "egl-fence-wait.so:/original/preload.so",

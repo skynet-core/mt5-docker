@@ -1,17 +1,71 @@
 #!/usr/bin/bash
 set -euo pipefail
-# The loopback-only relay keeps KWin as compositor without requiring host DRI3.
-export DISPLAY=$HOST_DISPLAY XAUTHORITY=$HOST_XAUTHORITY
-unset WAYLAND_DISPLAY
+if [[ ${1:-} == --display ]]; then
+	# The guest portal needs the compositor that starts after this frontend.
+	export DBUS_SESSION_BUS_ADDRESS=unix:path=/dev/null
+	export WAYLAND_DISPLAY=$HOST_WAYLAND_DISPLAY
+	exec /usr/local/libexec/plasma-xwayland "$PLASMA_SOFTWARE_DISPLAY" -auth /etc/plasma/Xauthority \
+		-nolisten tcp -noreset -geometry "${DISPLAY_WIDTH}x${DISPLAY_HEIGHT}" \
+		-shm -decorate -hidpi
+fi
+if [[ ${1:-} == --present ]]; then
+	shift
+	pids=()
+	# Invoked by EXIT when the presentation WM or viewer terminates.
+	# shellcheck disable=SC2317,SC2329
+	cleanup() {
+		kill "${pids[@]}" 2>/dev/null || true
+		wait "${pids[@]}" 2>/dev/null || true
+	}
+	trap cleanup EXIT
+	trap 'exit 0' TERM INT
+	KWIN_COMPOSE=N /usr/bin/kwin_x11 --replace &
+	pids+=("$!")
+	/usr/local/libexec/plasma-wait compositor
+	"$@" &
+	pids+=("$!")
+	wait -n "${pids[@]}"
+	exit $?
+fi
+# The relay keeps GPU composition independent of the host's DRI3 support.
+viewer_options=()
+if [[ $HOST_DISPLAY_BACKEND == wayland ]]; then
+	export WAYLAND_DISPLAY=$HOST_WAYLAND_DISPLAY
+	presenter_display=$PLASMA_SOFTWARE_DISPLAY
+	if [[ ${PLASMA_SOFTWARE_CAPTURE:-0} == 1 ]]; then
+		# Keep the visible frontend separate from QPainter's Xvfb backing.
+		presenter_display=$PLASMA_X11_DISPLAY
+	fi
+	if [[ $DISPLAY_BACKEND != wayland || ${PLASMA_SOFTWARE_NESTED:-0} != 1 || ${PLASMA_SOFTWARE_CAPTURE:-0} == 1 ]]; then
+		# Keep the host frontend independent of guest portal startup.
+		DBUS_SESSION_BUS_ADDRESS=unix:path=/dev/null /usr/bin/Xwayland "$presenter_display" -auth /etc/plasma/Xauthority \
+			-nolisten tcp -noreset -geometry "${DISPLAY_WIDTH}x${DISPLAY_HEIGHT}" -shm -decorate &
+	fi
+	export DISPLAY=$presenter_display XAUTHORITY=/etc/plasma/Xauthority
+	/usr/local/libexec/plasma-wait x11
+	viewer_options+=(-FullScreen=1)
+else
+	# The host X server has a separate SysV IPC namespace. Use Unix transport
+	# explicitly so TigerVNC falls back from MIT-SHM to normal XPutImage.
+	export DISPLAY="unix/$HOST_DISPLAY" XAUTHORITY=$HOST_XAUTHORITY
+	unset WAYLAND_DISPLAY
+fi
 viewer_help=$(/usr/bin/vncviewer --help 2>&1 || true)
 if [[ $viewer_help == *ShortcutModifiers* ]]; then
 	shortcut=-ShortcutModifiers=
 else
 	shortcut=-MenuKey=
 fi
-exec /usr/bin/vncviewer -PasswordFile=/etc/plasma/vnc-auth \
-	"$shortcut" \
-	-FullColor=1 -RemoteResize=0 \
-	-AcceptClipboard=0 -SendClipboard=0 -SendPrimary=0 -SetPrimary=0 \
-	-AlertOnFatalError=0 -ReconnectOnError=0 \
-	-geometry "${DISPLAY_WIDTH}x${DISPLAY_HEIGHT}+0+0" 127.0.0.1::5900
+# Keep local presentation lossless; JPEG changes chart colors.
+viewer=(/usr/bin/vncviewer -PasswordFile=/etc/plasma/vnc-auth
+	"${viewer_options[@]}"
+	"$shortcut"
+	-FullColor=1 -NoJPEG=1 -RemoteResize=0
+	-AcceptClipboard=0 -SendClipboard=0 -SendPrimary=0 -SetPrimary=0
+	-AlertOnFatalError=0 -ReconnectOnError=0
+	-geometry "${DISPLAY_WIDTH}x${DISPLAY_HEIGHT}+0+0" 127.0.0.1::5900)
+if [[ $HOST_DISPLAY_BACKEND == wayland ]]; then
+	# Legacy FLTK fullscreen needs a WM; isolate its non-compositing presentation.
+	exec dbus-run-session -- "$0" --present "${viewer[@]}"
+fi
+exec "${viewer[@]}"

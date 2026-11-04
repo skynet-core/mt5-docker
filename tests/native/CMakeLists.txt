@@ -62,7 +62,7 @@ foreach(vendor NVIDIA Mesa)
 endforeach()
 
 add_library(xtest-paced SHARED "${COMPAT}/xtest-paced.cpp")
-target_link_libraries(xtest-paced PRIVATE dl)
+target_link_libraries(xtest-paced PRIVATE dl X11)
 add_library(fake-xtest SHARED fake-xtest.cpp)
 add_executable(compat-unit compat-unit.cpp)
 target_link_libraries(compat-unit PRIVATE dl)
@@ -84,14 +84,24 @@ endforeach()
 add_executable(xtest-unit xtest-unit.cpp)
 target_link_libraries(xtest-unit PRIVATE dl)
 target_link_options(xtest-unit PRIVATE -Wl,--export-dynamic)
-add_test(NAME xtest-pacing COMMAND "${CMAKE_COMMAND}" -E env
-    "LD_PRELOAD=$<TARGET_FILE:xtest-paced>:$<TARGET_FILE:fake-xtest>"
-    $<TARGET_FILE:xtest-unit> $<TARGET_FILE:xtest-paced> $<TARGET_FILE:fake-xtest>)
-add_test(NAME xtest-missing COMMAND "${CMAKE_COMMAND}"
-    "-DPROGRAM=$<TARGET_FILE:xtest-unit>"
-    "-DCASE=$<TARGET_FILE:xtest-paced>;$<TARGET_FILE:fake-xtest>"
-    "-DENVIRONMENT=NATIVE_CASE=xtest-missing" "-DEXPECT=99" "-DMATCH=cannot resolve XTest"
-    -P "${CMAKE_CURRENT_SOURCE_DIR}/expect.cmake")
+foreach(software "" 0 1 10)
+    add_test(NAME xtest-pacing-${software} COMMAND "${CMAKE_COMMAND}" -E env
+        "PLASMA_SOFTWARE_CAPTURE=${software}"
+        "LD_PRELOAD=$<TARGET_FILE:xtest-paced>:$<TARGET_FILE:fake-xtest>"
+        $<TARGET_FILE:xtest-unit> $<TARGET_FILE:xtest-paced> $<TARGET_FILE:fake-xtest>)
+endforeach()
+foreach(symbol key button motion)
+    add_test(NAME xtest-missing-${symbol} COMMAND "${CMAKE_COMMAND}"
+        "-DPROGRAM=$<TARGET_FILE:xtest-unit>"
+        "-DCASE=$<TARGET_FILE:xtest-paced>;$<TARGET_FILE:fake-xtest>"
+        "-DENVIRONMENT=NATIVE_CASE=xtest-missing-${symbol}" "-DEXPECT=99" "-DMATCH=cannot resolve XTest"
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/expect.cmake")
+endforeach()
+add_executable(xtest-flush xtest-flush.cpp)
+target_link_libraries(xtest-flush PRIVATE X11 Xtst)
+add_test(NAME xtest-calibration-flush COMMAND "${CMAKE_COMMAND}" -E env
+    "LD_PRELOAD=$<TARGET_FILE:xtest-paced>" $<TARGET_FILE:xtest-flush>)
+set_tests_properties(xtest-calibration-flush PROPERTIES RUN_SERIAL TRUE)
 
 add_library(wayland-pointer-enter SHARED "${COMPAT}/wayland-pointer-enter.cpp")
 target_link_libraries(wayland-pointer-enter PRIVATE PkgConfig::WAYLAND dl)
@@ -142,15 +152,35 @@ set_tests_properties(pointer-enter-wire-warp-baseline pointer-enter-wire-warp-fi
     PROPERTIES SKIP_RETURN_CODE 77)
 
 add_executable(fixture-unit fixture-unit.cpp)
+find_program(TIGERVNC_TEST_PROGRAM NAMES viewport-enter
+    PATHS /tigervnc-build/vncviewer NO_DEFAULT_PATH REQUIRED)
+find_program(XWAYLAND_POINTER_TEST_PROGRAM NAMES pointer-unit
+    PATHS /xwayland-build/pointer-unit NO_DEFAULT_PATH REQUIRED)
+add_test(NAME xwayland-pointer-precision COMMAND "${XWAYLAND_POINTER_TEST_PROGRAM}")
+set_tests_properties(xwayland-pointer-precision PROPERTIES TIMEOUT 30)
+find_program(XWAYLAND_READY_TEST_PROGRAM NAMES pointer-unit
+    PATHS /xwayland-build/rootful-ready-unit NO_DEFAULT_PATH REQUIRED)
+add_test(NAME xwayland-rootful-readiness COMMAND "${XWAYLAND_READY_TEST_PROGRAM}")
+set_tests_properties(xwayland-rootful-readiness PROPERTIES TIMEOUT 30)
+add_test(NAME tigervnc-pointer-enter COMMAND "${TIGERVNC_TEST_PROGRAM}")
+set_tests_properties(tigervnc-pointer-enter PROPERTIES TIMEOUT 30)
+find_program(TIGERVNC_CRYPTO_TEST_PROGRAM NAMES viewer-crypto
+    PATHS /tigervnc-build/vncviewer NO_DEFAULT_PATH REQUIRED)
+add_test(NAME tigervnc-crypto COMMAND "${TIGERVNC_CRYPTO_TEST_PROGRAM}")
+set_tests_properties(tigervnc-crypto PROPERTIES TIMEOUT 30)
+find_program(KRFB_FRAME_TEST_PROGRAM NAMES krfb-frame-unit
+    PATHS /krfb-build/bin NO_DEFAULT_PATH REQUIRED)
+add_test(NAME krfb-shm-frame COMMAND "${KRFB_FRAME_TEST_PROGRAM}")
+set_tests_properties(krfb-shm-frame PROPERTIES TIMEOUT 30)
 target_link_libraries(fixture-unit PRIVATE Qt6::Widgets Qt6::DBus Qt6::Test dl)
-foreach(scenario text text-save-failed images publish-image image-save-failed invalid-args capture-ok capture-cursor capture-cursor-x11 capture-invalid-size capture-error capture-save-failed capture-no-screen capture-temp-failed capture-incomplete capture-x11)
+foreach(scenario text text-save-failed images publish-image image-save-failed invalid-args capture-ok capture-cursor capture-cursor-x11 capture-invalid-size capture-error capture-save-failed capture-no-screen capture-temp-failed capture-incomplete capture-x11 capture-x11-empty)
     add_test(NAME fixture-${scenario} COMMAND fixture-unit ${scenario})
 endforeach()
 add_executable(benchmark-unit benchmark-unit.cpp)
 target_link_libraries(benchmark-unit PRIVATE Qt6::Widgets Qt6::Test)
 add_test(NAME benchmark-ui COMMAND benchmark-unit)
 
-set_tests_properties(fixture-capture-x11 PROPERTIES SKIP_RETURN_CODE 77)
+set_tests_properties(fixture-capture-x11 fixture-capture-x11-empty PROPERTIES SKIP_RETURN_CODE 77)
 add_executable(clipboard-protocol-unit clipboard-protocol-unit.cpp fake-wayland.cpp)
 target_link_libraries(clipboard-protocol-unit PRIVATE protocols Qt6::Gui PkgConfig::XKB)
 foreach(scenario ext wlr-v1 wlr-v2 prefer-ext-first oversize-offer endpoint-wayland endpoint-x11 read-eintr read-eagain bridge bridge-fallback bridge-worker-zero)
@@ -170,6 +200,22 @@ endif()
 if(KRFB_SOURCE_DIR)
     find_package(KF6CoreAddons REQUIRED)
     find_path(RFB_INCLUDE_DIR rfb.h PATH_SUFFIXES rfb REQUIRED)
+
+    pkg_check_modules(VNC REQUIRED IMPORTED_TARGET libvncserver)
+    file(READ "${KRFB_SOURCE_DIR}/krfb/rfbserver.cpp" damage_source)
+    string(REGEX MATCHALL "void RfbServer::updateScreen\\(" damage_starts "${damage_source}")
+    list(LENGTH damage_starts damage_count)
+    string(REGEX MATCH "void RfbServer::updateScreen\\(const QList<QRect> &modifiedTiles\\)\n\\{(\n[ \t][^\n]*)*\n\\}"
+        damage_method "${damage_source}")
+    if(NOT damage_count EQUAL 1 OR NOT damage_method)
+        message(FATAL_ERROR "Expected exactly one complete pinned RfbServer::updateScreen method")
+    endif()
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${KRFB_SOURCE_DIR}/krfb/rfbserver.cpp")
+    file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/krfb-damage-method.inc" "${damage_method}\n")
+    add_executable(krfb-damage-unit krfb-damage-unit.cpp)
+    target_include_directories(krfb-damage-unit PRIVATE "${RFB_INCLUDE_DIR}" "${CMAKE_CURRENT_BINARY_DIR}")
+    target_link_libraries(krfb-damage-unit PRIVATE Qt6::Core PkgConfig::VNC)
+    add_test(NAME krfb-damage-edges COMMAND krfb-damage-unit)
     file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/krfbprivate_export.h" "#pragma once\n#define KRFBPRIVATE_EXPORT\n")
     add_library(krfb-test-api STATIC
         "${KRFB_SOURCE_DIR}/krfb/events.cpp" "${KRFB_SOURCE_DIR}/krfb/eventsplugin.cpp")

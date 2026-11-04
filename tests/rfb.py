@@ -87,8 +87,6 @@ class RFBClient:
 
     def click(self, x, y):
         self.pointer(x, y)
-        # Allow remote pointer focus to settle before pressing the button.
-        time.sleep(0.1)
         self.pointer(x, y, 1)
         time.sleep(0.08)
         self.pointer(x, y)
@@ -109,8 +107,6 @@ class RFBClient:
             self.held_keys.add(keysym)
         else:
             self.held_keys.discard(keysym)
-        # Wine reads modifier state asynchronously after the remote key event.
-        time.sleep(0.01)
 
     def text(self, value):
         for character in value:

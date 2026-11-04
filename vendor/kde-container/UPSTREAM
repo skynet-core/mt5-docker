@@ -1,58 +1,17 @@
 Source: https://github.com/skynet-core/kde-container
-Commit: 782714fb841737b884ea263ada5108ae3754be85
-Verified: 2026-10-28
+Commit: fb35001552fdb77c3be1b2981df06ebbf9d67fdc
+Pull request: https://github.com/skynet-core/kde-container/pull/5
+Verified: 2026-11-03
 
-Vendored runtime, compositor input and clipboard sources, KRFB patches, and GPU
-compatibility sources. Existing source copyright and license notices are retained.
-The test-only RFB client in ../../tests/rfb.py is copied from the same source commit.
+Runtime, input, clipboard, framebuffer and compatibility sources are copied
+byte for byte from this upstream PR commit. Copyright and licenses are retained.
+The linked pull request records review of this pinned snapshot.
 
-Local changes:
-- Native Wayland nesting forwards the position carried by wl_pointer.enter
-  before subsequent clicks. A scoped compatibility library preserves all twelve
-  current pointer callbacks and the original listener data, including across
-  older distro headers and newer compositor SDKs. Its constructor restores the
-  application's preload environment; nested init removes conflicting executable
-  capabilities for NVIDIA, AMD and software Wayland paths.
-- KRFB publishes its actual captured framebuffer size to the input plugin.
-  Absolute input is converted from those pixels to the output's logical geometry,
-  including its origin, instead of assuming one input pixel per logical unit.
-- The test fixture optionally includes the compositor cursor in ScreenShot2
-  captures. Tests isolate its full-frame difference against unchanged backgrounds.
-- Read-only RFB test clients no longer move the pointer when disconnecting;
-  outstanding buttons and keys are still released.
-- Docker native Wayland nesting requests NVIDIA driver injection automatically
-  when the host driver and NVIDIA runtime exist, preserving explicit GPU,
-  runtime, CDI and software-rendering choices.
-- Clipboard relay filters X11 selection negotiation targets (TARGETS, MULTIPLE,
-  TIMESTAMP and SAVE_TARGETS) before reading or forwarding data. Their atoms and
-  timestamps belong to one X server and are not transferable MIME content.
-- X11 kiosk sessions require kwin_x11, without requiring startplasma-x11.
-- Kiosk Qt clients use the generic theme, avoiding Qt 6.11's built-in KDE theme
-  startup crash when the optional Plasma integration package is absent.
-- Restart the compositor after successful exits too: KWin's wrapper returns zero
-  when it exhausts its crash retries. Explicit systemd stops still stop it.
-- Debian and Ubuntu source variants use the isolated /opt/kwin-6.8.2 stack. Its
-  Qt/KF paths and service cache are scoped to KWin and its matching KScreen
-  output client; distro applications retain their original library/plugin
-  environment. KWin 6.8 changed the output-device registry protocol.
-- Allocate and initialize KRFB's virtual-monitor framebuffer before publishing
-  its dimensions. An early VNC pixel request otherwise dereferences null before
-  PipeWire delivers the first captured frame.
-- Debian KWin 6.3 NVIDIA VNC/web sessions use the software-capture workaround
-  only when the optional /opt/kwin-6.8.2 compositor is absent. Source KWin 6.8.2
-  retains the normal GPU path in every mode.
-- Arch builds the separately namespaced upstream KWin X11 release because its
-  current repositories no longer publish kwin-x11.
-- Forced Wayland nesting also mounts the host X11 socket when clipboard sync is
-  enabled, allowing the Weston clipboard bridge to use its Xwayland fallback.
-- The test-only GUI fixture can capture actual headless outputs through KWin's
-  ScreenShot2 API or the X11 root screen. Its Save button has a solid color so
-  input tests can locate and click the rendered control across nested displays.
-- Software Wayland headless sessions on KWin using QPainter reuse the private
-  Xvfb backing display for native output capture, with remote servers disabled.
-  Test capture errors use stderr directly so Qt logging filters cannot hide them.
-- KWin 6.8 software sessions nested on X11 use their virtual compositor and a
-  local RFB viewer, avoiding the direct X11 backend's DRI3 requirement. KRFB
-  binds only to loopback for this internal relay; viewer clipboard forwarding
-  is disabled in favor of the existing text/image relay. Only the viewer and
-  libraries missing from the runtime are copied from distro build packages.
+../../build/upstream-sources.json binds every runtime file, the test RFB
+client and the shared root build helpers/package manifests to the same commit.
+The offline provenance test rejects source or executable-mode drift. Future
+generic fixes belong upstream before this snapshot and ledger are refreshed.
+
+MT5 retains its Wine package installer, desktop package subsets, image
+generator and build/test integration. The generator consumes the upstream
+KWin build/selection constants; WineHQ and product packaging stay here.

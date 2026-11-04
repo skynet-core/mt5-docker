@@ -5,13 +5,14 @@ repositories. Their packaged Qt/KF versions do not meet [KWin 6.8.2's build
 requirements](https://github.com/KDE/kwin/blob/v6.8.2/CMakeLists.txt). The
 `kwin-*` Docker stages build its required stack into `/opt/kwin-6.8.2` using
 Debian 13's older glibc. With the default `KWIN_VARIANT=source`, both final
-images copy the same runtime payload.
+images copy the same runtime payload. The `TARGET_APP` kiosk session activates
+it; applications keep their distro Qt environment.
 
 `--build-arg KWIN_VARIANT=distro` selects an empty overlay stage instead. BuildKit
 skips the entire Qt/KF/KWin source dependency graph and the image uses its distro
-compositor. Standard hosted CI uses this option to stay within its memory and
-disk budget. Debian's older NVIDIA remote compositor uses its software fallback
-in that variant; the source 6.8.2 variant keeps normal GPU selection.
+compositor. Hosted CI and local acceptance use the source variant. Debian's older
+NVIDIA remote compositor uses its software fallback in the distro variant; the
+source 6.8.2 variant keeps normal GPU selection.
 
 | Component | Version |
 | --- | --- |
@@ -63,3 +64,11 @@ docker build --target kwin-artifacts -f Dockerfile.debian-13 .
 Each source phase has its own cached stage. The final `mt5` image copies only
 the collected runtime tree; source archives, compilers and build tools stay
 in the builder stages.
+
+Fedora and Arch retain their distribution Wayland compositor and build the
+separate, namespaced KWin-X11 6.7.5 release with `build/arch-kwin-x11`. Arch no
+longer packages X11 KWin, while Fedora's KWin 6.8 conflicts with its older X11
+RPM. The shared builder verifies its pinned archive, derives `/usr/lib` or
+`/usr/lib64` from the distro Qt SDK, and rejects output that replaces Wayland
+KWin or its library. Only runtime artifacts and required runtime packages reach
+the final image. Debian and Ubuntu continue using their packaged X11 compositor.

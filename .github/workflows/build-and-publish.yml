@@ -274,6 +274,46 @@ jobs:
           tags: ${{ env.POINTER_PARENT_IMAGE }}
           cache-from: type=gha,scope=mt5-archlinux-${{ env.KWIN_VARIANT }}
 
+      - name: Bind validation to immutable image identities
+        run: |
+          uv run --locked python - <<'PY'
+          import hashlib
+          import json
+          import os
+          import re
+          import subprocess
+          from pathlib import Path
+
+          names = ("IMAGE", "FIXTURE_IMAGE", "POINTER_PARENT_IMAGE")
+          images = {
+              name: subprocess.check_output(
+                  ["docker", "image", "inspect", "--format", "{{.Id}}", os.environ[name]],
+                  text=True,
+              ).strip()
+              for name in names
+          }
+          if not all(re.fullmatch(r"sha256:[0-9a-f]{64}", image) for image in images.values()):
+              raise RuntimeError("Docker did not return immutable image IDs")
+          dirty = bool(subprocess.check_output(["git", "status", "--porcelain"], text=True).strip())
+          if dirty:
+              raise RuntimeError("CI tester worktree is dirty")
+          sources = (
+              "tests/mt5_market.py", "tests/mt5_market_probe.py", "tests/mt5_ui_probe.py",
+              "tests/runtime.py", "tests/mt5_input.py",
+          )
+          receipt = {
+              "git_revision": subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(),
+              "worktree_dirty": dirty,
+              "source_sha256": {name: hashlib.sha256(Path(name).read_bytes()).hexdigest() for name in sources},
+              "workflow_sha256": hashlib.sha256(Path(".github/workflows/build-and-publish.yml").read_bytes()).hexdigest(),
+              "images": images,
+          }
+          Path("artifacts/ci-images.json").write_text(json.dumps(receipt, indent=2) + "\n")
+          with Path(os.environ["GITHUB_ENV"]).open("a") as environment:
+              for name, image in images.items():
+                  environment.write(f"{name}={image}\n")
+          PY
+
       - name: Test every display mode with GUI input and screenshot evidence
         env:
           IMAGE_TAG: ${{ env.IMAGE }}
@@ -321,6 +361,14 @@ jobs:
             --image "$IMAGE" --parent-image "$POINTER_PARENT_IMAGE" \
             --case "$DISTRO" --output artifacts/autologin-pointer-matrix \
             --modes nested --pointer-scales 1 1.25 2 --startup autologin
+
+      - name: Verify Market browser painting in all ten display profiles
+        env:
+          PLAYWRIGHT_BROWSERS_PATH: ${{ runner.temp }}/mt5-playwright
+        run: |
+          uv run --locked python tests/mt5_market.py \
+            --image "$IMAGE" --parent-image "$FIXTURE_IMAGE" \
+            --case "$DISTRO" --output artifacts/mt5-market
 
       - name: Verify broker login, MCP and expert backtests in all eight modes
         if: steps.policy.outputs.publish == 'true'
@@ -371,7 +419,9 @@ jobs:
             artifacts/mt5-autologin-input/
             artifacts/autologin-pointer-matrix/
             artifacts/pointer-matrix/
+            artifacts/mt5-market/
             artifacts/tested-image-id.txt
+            artifacts/ci-images.json
             artifacts/broker/*/chart.png
             artifacts/broker/*/summary.json
             artifacts/broker/*/diagnostics.json
@@ -390,5 +440,9 @@ jobs:
             !artifacts/pointer-matrix/**/parent/runtime/**
             !artifacts/pointer-matrix/**/parent/x11/**
             !artifacts/pointer-matrix/**/parent/Xauthority
+            !artifacts/mt5-market/**/parent/runtime/**
+            !artifacts/mt5-market/**/parent/x11/**
+            !artifacts/mt5-market/**/parent/Xauthority
+            !artifacts/mt5-market/**/plasma-ui-fixture
           if-no-files-found: warn
           retention-days: 14

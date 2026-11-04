@@ -1,0 +1,131 @@
+--- a/hw/xwayland/xwayland-window.h
++++ b/hw/xwayland/xwayland-window.h
+@@ -105,6 +105,8 @@
+     struct wp_tearing_control_v1 *tearing_control;
+     struct wp_fractional_scale_v1 *fractional_scale;
+     int fractional_scale_numerator;
++    Bool rootful_configured;
++    Bool rootful_scale_received;
+     struct wp_linux_drm_syncobj_surface_v1 *surface_sync;
+ };
+ 
+--- a/hw/xwayland/xwayland-window.c
++++ b/hw/xwayland/xwayland-window.c
+@@ -73,6 +73,33 @@
+ 
+ static Bool xwl_window_attach_buffer(struct xwl_window *);
+ 
++/* The initial scale must be an actual host event, not our default value. */
++static void
++xwl_window_publish_rootful_scale(struct xwl_window *xwl_window)
++{
++    struct xwl_screen *xwl_screen = xwl_window->xwl_screen;
++    static const char name[] = "_XWAYLAND_ROOTFUL_SCALE";
++    CARD64 scale;
++    CARD32 numerator;
++    Atom atom;
++
++    if (xwl_screen->rootless || !xwl_window->rootful_configured ||
++        !xwl_window->rootful_scale_received)
++        return;
++
++    scale = (CARD64) xwl_screen->global_surface_scale *
++            xwl_window->fractional_scale_numerator;
++    if (!scale || scale > MAX_ROOTFUL_WIDTH * FRACTIONAL_SCALE_DENOMINATOR)
++        return;
++
++    numerator = (CARD32) scale;
++    atom = MakeAtom(name, sizeof(name) - 1, TRUE);
++    if (atom)
++        dixChangeWindowProperty(serverClient, xwl_window->toplevel, atom,
++                                XA_CARDINAL, 32, PropModeReplace, 1,
++                                &numerator, TRUE);
++}
++
+ struct xwl_window *
+ xwl_window_get(WindowPtr window)
+ {
+@@ -974,20 +1001,15 @@
+     double scale;
+ 
+     if (libdecor_configuration_get_content_size(configuration, frame, &width, &height)) {
+-        new_width = (double) width;
+-        new_height = (double) height;
++        scale = xwl_window_get_fractional_scale_factor(xwl_window);
++        new_width = (double) width * xwl_screen->global_surface_scale * scale;
++        new_height = (double) height * xwl_screen->global_surface_scale * scale;
+     }
+     else {
+-        new_width = xwl_screen->width / xwl_screen->global_surface_scale;
+-        new_height = xwl_screen->height / xwl_screen->global_surface_scale;
+-    }
+-
+-    new_width *= xwl_screen->global_surface_scale;
+-    new_height *= xwl_screen->global_surface_scale;
+-
+-    scale = xwl_window_get_fractional_scale_factor(xwl_window);
+-    new_width *= scale;
+-    new_height *= scale;
++        /* The current physical screen already includes the preferred scale. */
++        new_width = xwl_screen->width;
++        new_height = xwl_screen->height;
++    }
+ 
+     xwl_window_maybe_resize(xwl_window, new_width, new_height);
+ 
+@@ -997,6 +1019,8 @@
+     xwl_window_update_libdecor_size(xwl_window, configuration,
+                                     round(new_width), round(new_height));
+     wl_surface_commit(xwl_window->surface);
++    xwl_window->rootful_configured = TRUE;
++    xwl_window_publish_rootful_scale(xwl_window);
+ }
+ 
+ static void
+@@ -1043,6 +1067,8 @@
+ 
+     xdg_surface_ack_configure(xdg_surface, serial);
+     wl_surface_commit(xwl_window->surface);
++    xwl_window->rootful_configured = TRUE;
++    xwl_window_publish_rootful_scale(xwl_window);
+ }
+ 
+ static const struct xdg_surface_listener xdg_surface_listener = {
+@@ -1149,6 +1175,10 @@
+     if (xwl_output) {
+         xwl_window_enter_output(xwl_window, xwl_output);
+         xwl_window_update_surface_scale(xwl_window);
++        if (!xwl_window->fractional_scale) {
++            xwl_window->rootful_scale_received = TRUE;
++            xwl_window_publish_rootful_scale(xwl_window);
++        }
+     }
+ 
+     if (xwl_window->wl_output != wl_output) {
+@@ -1280,11 +1310,17 @@
+     struct xwl_screen *xwl_screen = xwl_window->xwl_screen;
+     double previous_scale = xwl_window_get_fractional_scale_factor(xwl_window);
+ 
++    if (!scale_numerator ||
++        scale_numerator > MAX_ROOTFUL_WIDTH * FRACTIONAL_SCALE_DENOMINATOR)
++        return;
++
+     if (xwl_window_update_fractional_scale(xwl_window, scale_numerator)) {
+         if (xwl_screen->fixed_output) { /* We're running rootful */
+             xwl_window_update_rootful_scale(xwl_window, previous_scale);
+         }
+     }
++    xwl_window->rootful_scale_received = TRUE;
++    xwl_window_publish_rootful_scale(xwl_window);
+ }
+ 
+ static const struct wp_fractional_scale_v1_listener fractional_scale_listener = {
+@@ -1487,6 +1523,8 @@
+     xwl_window->toplevel = window;
+     xwl_window->surface_window = window;
+     xwl_window->fractional_scale_numerator = FRACTIONAL_SCALE_DENOMINATOR;
++    /* Without -hidpi, scale one is the requested policy, not a host hint. */
++    xwl_window->rootful_scale_received = !xwl_screen->hidpi;
+     xwl_window->viewport_scale_x = 1.0;
+     xwl_window->viewport_scale_y = 1.0;
+     xwl_window->surface_scale = 1;
