@@ -15,6 +15,8 @@ The display runtime comes from [kde-container](https://github.com/skynet-core/kd
 
 See [Resolved challenges and root causes](#resolved-challenges-and-root-causes) for the installation, rendering, input and CI problems addressed during development.
 
+See [Known issues and image selection](KNOWN_ISSUES.md) for deferred issues, the latest per-image CI results and the suggested support baseline. No image passed the complete latest hosted validation; the failed run did not publish updated images.
+
 ## Setup
 
 Use a Linux x86-64 host with Docker and `uv` installed. The `.env` launcher needs Python 3.12 or newer, which `uv` can manage. Run the launcher as a regular user with Docker access; use your desktop user's terminal for nested displays so it can discover the display sockets and credentials. The containers use the inherited privileged systemd setup.
