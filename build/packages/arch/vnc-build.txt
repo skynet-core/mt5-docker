@@ -34,3 +34,13 @@ kpipewire
 pipewire
 plasma-wayland-protocols
 kwayland
+meson
+xtrans
+libxfont2
+libxkbfile
+libxcvt
+libdecor
+wayland-protocols
+xz
+libxshmfence
+libdrm

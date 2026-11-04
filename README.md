@@ -11,7 +11,7 @@ Four amd64 images extend the corresponding [`skynet-core/systemd`](https://githu
 
 The images install Wine, Microsoft's Evergreen WebView2 runtime, the official MT5 terminal/MetaEditor/Strategy Tester, and Windows Python for `mt5-mcp`. MT5 fills the display under KWin as the unprivileged `plasma` user. Wine uses X11, through Xwayland in Wayland sessions. Systemd remains PID 1. Plasma desktop applications and the desktop shell are omitted.
 
-The display runtime is vendored from [`skynet-core/kde-container` at `782714f`](https://github.com/skynet-core/kde-container/tree/782714fb841737b884ea263ada5108ae3754be85). Its native clipboard bridge, patched KRFB capture/input, GPU probe, software fallback, and scoped NVIDIA synchronization fix are retained. See [the source record](vendor/kde-container/UPSTREAM) for local changes.
+The display runtime comes from [kde-container](https://github.com/skynet-core/kde-container). Generic GPU, input, clipboard and framebuffer fixes are maintained there. The [source record](vendor/kde-container/UPSTREAM) pins the exact commit; [the source ledger](build/upstream-sources.json) and its offline test verify copied file contents and executable modes. MT5 retains its Wine setup, image packaging and application tests.
 
 See [Resolved challenges and root causes](#resolved-challenges-and-root-causes) for the installation, rendering, input and CI problems addressed during development.
 
@@ -320,7 +320,7 @@ uv run --locked python tests/validate.py --container mt5-fedora-44 --case fedora
 MT5_ENV_FILE="$PWD/.env" tests/matrix.sh
 ```
 
-The validator checks the exact account/server and downloaded history through `mt5-mcp`, compiles MT5's bundled `MQL5/Experts/Advisors/ExpertMACD.mq5` with MetaEditor, runs Strategy Tester with a unique report, and retrieves the chart screenshot, MT5 window screenshot, report, parsed statistics, compiler output and service/terminal/tester logs. It prints each evidence directory under `artifacts/`. Backtests use local agents with cloud and remote agents disabled. Custom experts under `expert/` are ignored by Git and are not required by tests.
+The validator checks the exact account/server and downloaded history through `mt5-mcp`, compiles MT5's bundled `MQL5/Experts/Advisors/ExpertMACD.mq5` with MetaEditor, runs Strategy Tester with a unique report, and retrieves the chart screenshot, MT5 window screenshot, report, parsed statistics, compiler output and service/terminal/tester logs. It prints each evidence directory under `artifacts/`. `--timeout` sets the budget for each history, screenshot, or report wait (600 seconds by default). Backtests use local agents with cloud and remote agents disabled. Custom experts under `expert/` are ignored by Git and are not required by tests.
 
 `tests/matrix.sh` runs all four images across both compositors and all four modes, authenticates VNC/web connections, and captures their remote framebuffer. Pass distro names to select images, for example `tests/matrix.sh fedora-44`. Nested cases require an available host display. The separate `tests/clipboard.py` exchanges text and PNG data with a disposable parent display, checks that its sockets belong to that parent, and saves bidirectional evidence without changing the user's clipboard.
 
@@ -345,10 +345,10 @@ Use the corresponding Dockerfile and tag for Debian, Ubuntu or Arch. The default
 Run the complete display matrix against the four production images with:
 
 ```sh
-# Build matching test tools without recompiling the private KWin stack.
+# Build matching test tools; cached stages reuse the private KWin stack.
 for distro in fedora-44 debian-13 ubuntu-26.04 archlinux; do
   docker build -f "Dockerfile.$distro" --target runtime-test \
-    --build-arg KWIN_VARIANT=distro -t "mt5:runtime-test-$distro" .
+    --build-arg KWIN_VARIANT=source -t "mt5:runtime-test-$distro" .
 done
 tests/display-matrix.sh
 ```
@@ -578,7 +578,7 @@ This summary records confirmed causes and implemented corrections. Several sympt
 | A minimal kiosk crashes during Qt theme initialization or cannot find compositor services | The built-in KDE theme expects optional integration packages; bypassing normal Plasma startup also skips service-cache preparation. | Use Qt's generic theme for kiosk clients and build the appropriately scoped KDE service cache without adding the full desktop shell. |
 | A crashed compositor stays down despite restart settings | KWin's wrapper may return zero after exhausting its own crash retries. | Restart the session after successful exits too; an explicit systemd stop still stops it. |
 | VNC crashes when a client requests pixels before the first captured frame | KRFB advertised dimensions before allocating its framebuffer; PipeWire had not delivered a frame yet. | Allocate and initialize the framebuffer before publishing it. A startup regression pauses capture and requests pixels before resuming the real window. |
-| Headless screenshots or nested Wayland fail on GPU-less runners | Older QPainter sessions lack ScreenShot2; direct KWin 6.8 X11 nesting requires DRI3 unavailable on CPU-only hosts. | Capture the actual private Xvfb-backed output where required. For software nesting on X11, use an authenticated loopback RFB viewer while KWin remains the compositor. Preserve the clipboard relay and copy only needed viewer libraries into the runtime. |
+| Headless screenshots or nested Wayland fail on GPU-less runners | Older QPainter sessions lack ScreenShot2; direct KWin 6.8 X11 nesting requires DRI3 unavailable on CPU-only hosts. | Capture the actual private Xvfb-backed output where required. Source-stack Wayland nesting uses an authenticated private SHM Xwayland frontend and lossless loopback viewer while KWin remains the compositor. The frontend negotiates host scale and decorations; the clipboard relay remains active. Copy only required viewer/frontend libraries into the runtime. |
 
 Disabling `CLIPBOARD_SYNC` helped one reported Fedora comparison, but that alone did not establish the cause of its click failures. The confirmed clipboard and coordinate fixes above have separate regression evidence. Clipboard sharing also does not imply support for cross-session drag-and-drop.
 
@@ -604,4 +604,4 @@ Disabling `CLIPBOARD_SYNC` helped one reported Fedora comparison, but that alone
 | Concurrent or failed CI runs publish unverified images | Rebuilding after tests changes the image being published; outdated runs can overlap newer commits. | Supersede stale branch runs, gate publication on all acceptance tests, retag the tested image instead of rebuilding, and verify both mutable and commit-specific registry tags against its configuration digest. |
 | A public coverage site or README update becomes stale, exposes raw logs or triggers another build loop | Cross-workflow artifacts, concurrent branch edits and generated documentation commits need explicit boundaries. | Accept only successful trusted default-branch runs; check artifact digests and report schema; allowlist static assets. Deploy Pages, then update only README coverage markers with bounded non-force retries. Built-in-token commits use `[skip ci]`. |
 
-The final [image workflow](https://github.com/skynet-core/mt5-docker/actions/runs/40967817657) and [coverage workflow](https://github.com/skynet-core/mt5-docker/actions/runs/40986172562) passed. Their retained artifacts contain profile-level logs, screenshots, measurements and report provenance. The local evidence paths and hardware scope are listed in [Recorded acceptance](#recorded-acceptance).
+The historical [image workflow](https://github.com/skynet-core/mt5-docker/actions/runs/40967817657) and [coverage workflow](https://github.com/skynet-core/mt5-docker/actions/runs/40986172562) passed. Their retained artifacts contain profile-level logs, screenshots, measurements and report provenance. The local evidence paths and hardware scope are listed in [Recorded acceptance](#recorded-acceptance).

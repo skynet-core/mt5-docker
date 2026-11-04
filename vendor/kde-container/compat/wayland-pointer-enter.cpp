@@ -8,9 +8,13 @@
 #include <cstring>
 #include <dlfcn.h>
 #include <mutex>
+#include <stdint.h>
+#include <stdlib.h>
 #include <time.h>
 #include <vector>
+#include <wayland-client-core.h>
 #include <wayland-client-protocol.h>
+#include <wayland-util.h>
 #include <wayland-version.h>
 
 namespace {
@@ -62,8 +66,8 @@ bool pointerLocked(wl_proxy *pointer) {
   return std::any_of(state.objects.begin(), state.objects.end(),
                      [pointer](const PointerLock &lock) {
                        return lock.active &&
-                           lock.display == wl_proxy_get_display(pointer) &&
-                           lock.pointer == wl_proxy_get_id(pointer);
+                              lock.display == wl_proxy_get_display(pointer) &&
+                              lock.pointer == wl_proxy_get_id(pointer);
                      });
 }
 void forgetProxy(wl_proxy *proxy) {
@@ -73,12 +77,14 @@ void forgetProxy(wl_proxy *proxy) {
       std::remove_if(state.objects.begin(), state.objects.end(),
                      [proxy](const PointerLock &lock) {
                        return lock.proxy == proxy ||
-                           (lock.display == wl_proxy_get_display(proxy) &&
-                            (lock.pointer == wl_proxy_get_id(proxy) ||
-                             lock.surface == wl_proxy_get_id(proxy)));
+                              (lock.display == wl_proxy_get_display(proxy) &&
+                               (lock.pointer == wl_proxy_get_id(proxy) ||
+                                lock.surface == wl_proxy_get_id(proxy)));
                      }),
       state.objects.end());
 }
+// libwayland fixes the order of the dispatcher's opaque ABI parameters.
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 int dispatchLock(const void *implementation, void *target, uint32_t opcode,
                  const wl_message *, wl_argument *) {
   if (opcode > 1)
@@ -100,6 +106,8 @@ int dispatchLock(const void *implementation, void *target, uint32_t opcode,
   return 0;
 }
 
+// libwayland fixes the order of the dispatcher's opaque ABI parameters.
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 int dispatchPointer(const void *implementation, void *target, uint32_t opcode,
                     const wl_message *message, wl_argument *arguments) {
   const auto *listener =
@@ -115,9 +123,12 @@ int dispatchPointer(const void *implementation, void *target, uint32_t opcode,
                       reinterpret_cast<wl_surface *>(arguments[1].o),
                       arguments[2].f, arguments[3].f);
     // A grab's host position stays frozen while relative motion moves KWin's
-    // software cursor; a subsurface enter must not reset that relative position.
+    // software cursor; a subsurface enter must not reset that relative
+    // position.
     if (listener->motion && !pointerLocked(static_cast<wl_proxy *>(target))) {
       timespec now{};
+      // POSIX time.h exports this macro from glibc's private bits/time.h.
+      // NOLINTNEXTLINE(misc-include-cleaner)
       if (clock_gettime(CLOCK_MONOTONIC, &now) != 0)
         fail("cannot read the monotonic pointer clock");
       const auto milliseconds = static_cast<uint32_t>(
@@ -207,22 +218,24 @@ extern "C" int wl_proxy_add_listener(wl_proxy *proxy,
     static const auto original =
         resolve<decltype(&wl_proxy_add_dispatcher)>("wl_proxy_add_dispatcher");
     return original(proxy, pointer ? dispatchPointer : dispatchLock,
-                     implementation, data);
+                    static_cast<const void *>(implementation), data);
   }
   static const auto original =
       resolve<decltype(&wl_proxy_add_listener)>("wl_proxy_add_listener");
   return original(proxy, implementation, data);
 }
 
-extern "C" wl_proxy *wl_proxy_marshal_array_flags(
-    wl_proxy *proxy, uint32_t opcode, const wl_interface *interface,
-    uint32_t version, uint32_t flags, wl_argument *arguments) {
+extern "C" wl_proxy *
+wl_proxy_marshal_array_flags(wl_proxy *proxy, uint32_t opcode,
+                             const wl_interface *interface, uint32_t version,
+                             uint32_t flags, wl_argument *arguments) {
   // Generated variadic requests also pass through this packed-argument API.
   static const auto original = resolve<decltype(&wl_proxy_marshal_array_flags)>(
       "wl_proxy_marshal_array_flags");
-  const bool creatingLock = interface &&
-      std::strcmp(interface->name, "zwp_locked_pointer_v1") == 0 &&
-      std::strcmp(wl_proxy_get_class(proxy), "zwp_pointer_constraints_v1") == 0 &&
+  const bool creatingLock =
+      interface && std::strcmp(interface->name, "zwp_locked_pointer_v1") == 0 &&
+      std::strcmp(wl_proxy_get_class(proxy), "zwp_pointer_constraints_v1") ==
+          0 &&
       opcode == 1;
   if (flags & WL_MARSHAL_FLAG_DESTROY)
     forgetProxy(proxy);
@@ -230,10 +243,10 @@ extern "C" wl_proxy *wl_proxy_marshal_array_flags(
   if (created && creatingLock) {
     auto &state = locks();
     const std::lock_guard<std::mutex> guard(state.mutex);
-    state.objects.push_back({
-        created, wl_proxy_get_display(created),
-        wl_proxy_get_id(reinterpret_cast<wl_proxy *>(arguments[2].o)),
-        wl_proxy_get_id(reinterpret_cast<wl_proxy *>(arguments[1].o))});
+    state.objects.push_back(
+        {created, wl_proxy_get_display(created),
+         wl_proxy_get_id(reinterpret_cast<wl_proxy *>(arguments[2].o)),
+         wl_proxy_get_id(reinterpret_cast<wl_proxy *>(arguments[1].o))});
   }
   return created;
 }
@@ -241,9 +254,10 @@ extern "C" wl_proxy *wl_proxy_marshal_array_flags(
 #if WAYLAND_VERSION_MAJOR > 1 || WAYLAND_VERSION_MINOR >= 24
 // Some distro libraries bind their internal array call locally; pack through
 // the public interface metadata so those requests use the same tracked path.
-extern "C" wl_proxy *wl_proxy_marshal_flags(
-    wl_proxy *proxy, uint32_t opcode, const wl_interface *interface,
-    uint32_t version, uint32_t flags, ...) {
+extern "C" wl_proxy *wl_proxy_marshal_flags(wl_proxy *proxy, uint32_t opcode,
+                                            const wl_interface *interface,
+                                            uint32_t version, uint32_t flags,
+                                            ...) {
   const auto *requestInterface = wl_proxy_get_interface(proxy);
   if (opcode >= static_cast<uint32_t>(requestInterface->method_count))
     fail("invalid Wayland request opcode");
@@ -257,28 +271,43 @@ extern "C" wl_proxy *wl_proxy_marshal_flags(
       continue;
     wl_argument value{};
     switch (*type) {
-    case 'i': value.i = va_arg(values, int32_t); break;
-    case 'u': value.u = va_arg(values, uint32_t); break;
-    case 'f': value.f = va_arg(values, wl_fixed_t); break;
-    case 's': value.s = va_arg(values, const char *); break;
+    case 'i':
+      value.i = va_arg(values, int32_t);
+      break;
+    case 'u':
+      value.u = va_arg(values, uint32_t);
+      break;
+    case 'f':
+      value.f = va_arg(values, wl_fixed_t);
+      break;
+    case 's':
+      value.s = va_arg(values, const char *);
+      break;
     case 'o':
-    case 'n': value.o = va_arg(values, wl_object *); break;
-    case 'a': value.a = va_arg(values, wl_array *); break;
-    case 'h': value.h = va_arg(values, int32_t); break;
-    default: fail("unknown Wayland request argument type");
+    case 'n':
+      value.o = va_arg(values, wl_object *);
+      break;
+    case 'a':
+      value.a = va_arg(values, wl_array *);
+      break;
+    case 'h':
+      value.h = va_arg(values, int32_t);
+      break;
+    default:
+      fail("unknown Wayland request argument type");
     }
     arguments.push_back(value);
   }
   va_end(values);
   return wl_proxy_marshal_array_flags(proxy, opcode, interface, version, flags,
-                                       arguments.data());
+                                      arguments.data());
 }
 #endif
 
 extern "C" void wl_proxy_destroy(wl_proxy *proxy) {
   forgetProxy(proxy);
-  static const auto original = resolve<decltype(&wl_proxy_destroy)>(
-      "wl_proxy_destroy");
+  static const auto original =
+      resolve<decltype(&wl_proxy_destroy)>("wl_proxy_destroy");
   original(proxy);
 }
 
@@ -286,14 +315,14 @@ extern "C" void wl_display_disconnect(wl_display *display) {
   {
     auto &state = locks();
     const std::lock_guard<std::mutex> guard(state.mutex);
-    state.objects.erase(
-        std::remove_if(state.objects.begin(), state.objects.end(),
-                       [display](const PointerLock &lock) {
-                         return lock.display == display;
-                       }),
-        state.objects.end());
+    state.objects.erase(std::remove_if(state.objects.begin(),
+                                       state.objects.end(),
+                                       [display](const PointerLock &lock) {
+                                         return lock.display == display;
+                                       }),
+                        state.objects.end());
   }
-  static const auto original = resolve<decltype(&wl_display_disconnect)>(
-      "wl_display_disconnect");
+  static const auto original =
+      resolve<decltype(&wl_display_disconnect)>("wl_display_disconnect");
   original(display);
 }

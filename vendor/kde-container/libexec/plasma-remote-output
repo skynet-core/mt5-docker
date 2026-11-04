@@ -1,7 +1,9 @@
 #!/usr/bin/python3
 """Make krfb's exported monitor the sole active output, including the desktop panel."""
 
+import ctypes
 import json
+import math
 import os
 import subprocess
 import sys
@@ -9,11 +11,359 @@ import time
 from pathlib import Path
 
 
+def scaled_frontend():
+    return (
+        os.environ.get("DISPLAY_BACKEND") == "wayland"
+        and os.environ.get("DISPLAY_MODE") == "nested"
+        and os.environ.get("HOST_DISPLAY_BACKEND") == "wayland"
+        and os.environ.get("PLASMA_SOFTWARE_NESTED") == "1"
+        and os.environ.get("PLASMA_SOFTWARE_CAPTURE") != "1"
+    )
+
+
+def frontend_scale(*, prepare=False):
+    """Latch the owned surface's startup scale before RandR consumes its hint.
+
+    The relay keeps its initial guest framebuffer; changing the host scale
+    requires restarting the private presentation display.
+    """
+    if not scaled_frontend():
+        return 1.0
+    c = ctypes
+
+    class Resources(c.Structure):
+        _fields_ = (
+            ("timestamp", c.c_ulong),
+            ("configTimestamp", c.c_ulong),
+            ("ncrtc", c.c_int),
+            ("crtcs", c.POINTER(c.c_ulong)),
+            ("noutput", c.c_int),
+            ("outputs", c.POINTER(c.c_ulong)),
+            ("nmode", c.c_int),
+            ("modes", c.c_void_p),
+        )
+
+    class CrtcInfo(c.Structure):
+        _fields_ = (
+            ("timestamp", c.c_ulong),
+            ("x", c.c_int),
+            ("y", c.c_int),
+            ("width", c.c_uint),
+            ("height", c.c_uint),
+            ("mode", c.c_ulong),
+            ("rotation", c.c_ushort),
+            ("noutput", c.c_int),
+            ("outputs", c.POINTER(c.c_ulong)),
+            ("rotations", c.c_ushort),
+            ("npossible", c.c_int),
+            ("possible", c.POINTER(c.c_ulong)),
+        )
+
+    class Transform(c.Structure):
+        _fields_ = (("matrix", (c.c_int32 * 3) * 3),)
+
+    class Attributes(c.Structure):
+        _fields_ = (
+            ("pendingTransform", Transform),
+            ("pendingFilter", c.c_char_p),
+            ("pendingNparams", c.c_int),
+            ("pendingParams", c.POINTER(c.c_int32)),
+            ("currentTransform", Transform),
+            ("currentFilter", c.c_char_p),
+            ("currentNparams", c.c_int),
+            ("currentParams", c.POINTER(c.c_int32)),
+        )
+
+    class ScreenSize(c.Structure):
+        _fields_ = tuple(
+            (name, c.c_int) for name in ("width", "height", "mwidth", "mheight")
+        )
+
+    x11, randr = c.CDLL("libX11.so.6"), c.CDLL("libXrandr.so.2")
+
+    def bind(library, name, result, *arguments):
+        function = getattr(library, name)
+        function.restype, function.argtypes = result, list(arguments)
+        return function
+
+    pointer, integer, unsigned = c.c_void_p, c.c_int, c.c_ulong
+    open_display = bind(x11, "XOpenDisplay", pointer, c.c_char_p)
+    close_display = bind(x11, "XCloseDisplay", integer, pointer)
+    root_window = bind(x11, "XDefaultRootWindow", unsigned, pointer)
+    width = bind(x11, "XDisplayWidth", integer, pointer, integer)
+    height = bind(x11, "XDisplayHeight", integer, pointer, integer)
+    free = bind(x11, "XFree", integer, pointer)
+    atom_for = bind(x11, "XInternAtom", unsigned, pointer, c.c_char_p, integer)
+    get_property = bind(
+        x11,
+        "XGetWindowProperty",
+        integer,
+        pointer,
+        unsigned,
+        unsigned,
+        c.c_long,
+        c.c_long,
+        integer,
+        unsigned,
+        c.POINTER(unsigned),
+        c.POINTER(integer),
+        c.POINTER(unsigned),
+        c.POINTER(unsigned),
+        c.POINTER(pointer),
+    )
+    change_property = bind(
+        x11,
+        "XChangeProperty",
+        integer,
+        pointer,
+        unsigned,
+        unsigned,
+        unsigned,
+        integer,
+        integer,
+        pointer,
+        integer,
+    )
+    resources_for = bind(
+        randr, "XRRGetScreenResourcesCurrent", c.POINTER(Resources), pointer, unsigned
+    )
+    free_resources = bind(randr, "XRRFreeScreenResources", None, c.POINTER(Resources))
+    crtc_for = bind(
+        randr,
+        "XRRGetCrtcInfo",
+        c.POINTER(CrtcInfo),
+        pointer,
+        c.POINTER(Resources),
+        unsigned,
+    )
+    free_crtc = bind(randr, "XRRFreeCrtcInfo", None, c.POINTER(CrtcInfo))
+    transform_for = bind(
+        randr,
+        "XRRGetCrtcTransform",
+        integer,
+        pointer,
+        unsigned,
+        c.POINTER(c.POINTER(Attributes)),
+    )
+    config_for = bind(randr, "XRRGetScreenInfo", pointer, pointer, unsigned)
+    config_sizes = bind(
+        randr, "XRRConfigSizes", c.POINTER(ScreenSize), pointer, c.POINTER(integer)
+    )
+    free_config = bind(randr, "XRRFreeScreenConfigInfo", None, pointer)
+    set_config = bind(
+        randr,
+        "XRRSetScreenConfig",
+        integer,
+        pointer,
+        pointer,
+        unsigned,
+        integer,
+        c.c_ushort,
+        unsigned,
+    )
+    # KWin gives applications a separate cookie for its own rootless Xwayland.
+    # Only this connection uses the owned frontend's seeded authority file.
+    authority = os.environ.get("XAUTHORITY")
+    os.environ["XAUTHORITY"] = "/etc/plasma/Xauthority"
+    try:
+        display = open_display(os.environ["PLASMA_SOFTWARE_DISPLAY"].encode())
+    finally:
+        if authority is None:
+            os.environ.pop("XAUTHORITY", None)
+        else:
+            os.environ["XAUTHORITY"] = authority
+    if not display:
+        raise ValueError("Nested presentation display is unavailable")
+    resources = attributes = config = None
+    try:
+        root = root_window(display)
+        resources = resources_for(display, root)
+        if not resources:
+            raise ValueError("Nested presentation outputs are unavailable")
+        active = []
+        for index in range(resources.contents.ncrtc):
+            crtc = resources.contents.crtcs[index]
+            info = crtc_for(display, resources, crtc)
+            if not info:
+                raise ValueError(
+                    "Nested presentation output information is unavailable"
+                )
+            try:
+                if (
+                    info.contents.mode
+                    and info.contents.width
+                    and info.contents.height
+                    and info.contents.noutput
+                ):
+                    active.append(crtc)
+            finally:
+                free_crtc(info)
+        if len(active) != 1:
+            raise ValueError(
+                f"Nested presentation requires one active output (found {len(active)})"
+            )
+        attributes = c.POINTER(Attributes)()
+        if not transform_for(display, active[0], c.byref(attributes)) or not attributes:
+            raise ValueError("Nested presentation scale is unavailable")
+        matrix = [
+            value / 65536
+            for row in attributes.contents.currentTransform.matrix
+            for value in row
+        ]
+        scale = matrix[0]
+        if scale <= 0 or matrix != [scale, 0, 0, 0, scale, 0, 0, 0, 1]:
+            raise ValueError("Nested presentation scale must be positive and uniform")
+        # wp_fractional_scale uses units of 1/120; RandR truncates that scale
+        # to 16.16. Restore the protocol value before Qt rounds pixel sizes.
+        protocol_scale = math.floor(scale * 120 + 0.5) / 120
+        if not math.isclose(scale, protocol_scale, rel_tol=0, abs_tol=1 / 65536):
+            raise ValueError("Nested presentation scale is not a Wayland scale")
+        # Xwayland publishes this only after its initial configure and actual
+        # preferred-scale (or integer-output enter) event have both completed.
+        marker = atom_for(display, b"_XWAYLAND_ROOTFUL_SCALE", True)
+        if not marker:
+            raise ValueError("Waiting for the host surface's initial scale")
+        actual_type, count, trailing = unsigned(), unsigned(), unsigned()
+        actual_format, data = integer(), pointer()
+        try:
+            status = get_property(
+                display,
+                root,
+                marker,
+                0,
+                1,
+                False,
+                6,
+                c.byref(actual_type),
+                c.byref(actual_format),
+                c.byref(count),
+                c.byref(trailing),
+                c.byref(data),
+            )
+            if (
+                status
+                or actual_type.value != 6
+                or actual_format.value != 32
+                or count.value != 1
+                or trailing.value
+                or not data
+            ):
+                raise ValueError("Host surface scale is not ready or malformed")
+            acknowledged = c.cast(data, c.POINTER(unsigned))[0]
+            if not 1 <= acknowledged <= 32767 * 120:
+                raise ValueError("Host surface scale is out of range")
+        finally:
+            if data:
+                free(data)
+        scale = acknowledged / 120
+        if protocol_scale not in (1, scale):
+            raise ValueError("Host surface scale disagrees with RandR")
+        logical = [int(os.environ[key]) for key in ("DISPLAY_WIDTH", "DISPLAY_HEIGHT")]
+        atom = atom_for(display, b"_PLASMA_CONTAINER_STARTUP_SCALE", False)
+        if not atom:
+            raise ValueError("Nested startup scale property is unavailable")
+        actual_type, count, trailing = unsigned(), unsigned(), unsigned()
+        actual_format, data = integer(), pointer()
+        try:
+            status = get_property(
+                display,
+                root,
+                atom,
+                0,
+                4,
+                False,
+                6,
+                c.byref(actual_type),
+                c.byref(actual_format),
+                c.byref(count),
+                c.byref(trailing),
+                c.byref(data),
+            )
+            if status:
+                raise ValueError("Cannot read nested startup scale")
+            record = None
+            if actual_type.value:
+                if (
+                    actual_type.value != 6
+                    or actual_format.value != 32
+                    or count.value != 4
+                    or trailing.value
+                    or not data
+                ):
+                    raise ValueError("Malformed nested startup scale property")
+                # Xlib expands format-32 values into native long slots on LP64.
+                record = list(c.cast(data, c.POINTER(unsigned))[:4])
+                numerator, saved_width, saved_height, ready = record
+                if (
+                    not 1 <= numerator <= 32767 * 120
+                    or [saved_width, saved_height] != logical
+                    or ready not in (0, 1)
+                ):
+                    raise ValueError("Invalid nested startup scale record")
+                if numerator != acknowledged:
+                    if not prepare:
+                        raise ValueError(
+                            "Nested frontend scale changed; restart its display"
+                        )
+                    record = None
+            elif actual_format.value or count.value or trailing.value or data:
+                raise ValueError("Malformed missing nested startup scale")
+        finally:
+            if data:
+                free(data)
+        if record is None and not prepare:
+            raise ValueError("Nested startup scale has not been prepared")
+        pixels = [math.floor(value * scale + 0.5) for value in logical]
+        if not all(16 <= value <= 32767 for value in (*logical, *pixels)):
+            raise ValueError("Nested presentation dimensions are out of range")
+
+        def publish(ready):
+            values = (unsigned * 4)(math.floor(scale * 120 + 0.5), *logical, ready)
+            if not change_property(
+                display, root, atom, 6, 32, 0, c.cast(values, pointer), 4
+            ):
+                raise ValueError("Cannot publish nested startup scale")
+
+        if prepare:
+            if pixels != [width(display, 0), height(display, 0)]:
+                # RR1.1 resets the exposed transform to identity. Latch the
+                # observed startup scale on this server before consuming it.
+                publish(0)
+                # Rootful Xwayland's RandR 1.1 hook resizes the actual surface.
+                # RandR 1.2 CRTC mode changes only emulate a per-client mode.
+                config = config_for(display, root)
+                if not config:
+                    raise ValueError("Nested presentation modes are unavailable")
+                count = integer()
+                sizes = config_sizes(config, c.byref(count))
+                modes = [
+                    [sizes[index].width, sizes[index].height]
+                    for index in range(count.value)
+                ]
+                if pixels not in modes or set_config(
+                    display, config, root, modes.index(pixels), 1, 0
+                ):
+                    raise ValueError("Cannot initialize nested presentation dimensions")
+                raise ValueError("Waiting for nested presentation dimensions")
+            publish(1)
+        elif not record[3]:
+            raise ValueError("Nested startup scale is not ready")
+        return scale
+    finally:
+        if config:
+            free_config(config)
+        if attributes:
+            free(attributes)
+        if resources:
+            free_resources(resources)
+        close_display(display)
+
+
 def kscreen(*arguments, **options):
     environment = dict(os.environ)
     binary = "kscreen-doctor"
     prefix = Path("/opt/kwin-6.8.2")
-    if (prefix / "bin/kscreen-doctor").is_file():
+    if os.environ.get("TARGET_APP") and (prefix / "bin/kscreen-doctor").is_file():
         # KWin 6.8 replaced the output-device global with a registry. Its
         # matching client needs the private Qt stack, scoped to this process.
         binary = str(prefix / "bin/kscreen-doctor")
@@ -51,12 +401,44 @@ def configured(items):
         os.environ.get("PLASMA_SOFTWARE_CAPTURE") == "1"
         or os.environ.get("PLASMA_VNC_EXISTING_OUTPUT") == "1"
     )
-    return (
+    ready = (
         len(active) == 1
         and (existing or active[0]["name"] == "Virtual-Plasma")
         and active[0].get("pos") == {"x": 0, "y": 0}
     )
+    if ready and scaled_frontend():
+        scale = frontend_scale()
+        current = active[0]
+        modes = [
+            mode
+            for mode in current.get("modes", [])
+            if str(mode["id"]) == str(current.get("currentModeId"))
+        ]
+        ready = (
+            current.get("scale") == scale
+            and len(modes) == 1
+            and modes[0].get("size")
+            == {
+                key: math.floor(int(os.environ["DISPLAY_" + key.upper()]) * scale + 0.5)
+                for key in ("width", "height")
+            }
+        )
+    return ready
 
+
+if "--scale" in sys.argv:
+    print(frontend_scale())
+    sys.exit(0)
+if "--prepare" in sys.argv:
+    deadline = time.monotonic() + 60
+    while True:
+        try:
+            frontend_scale(prepare=True)
+            sys.exit(0)
+        except (OSError, ValueError) as error:
+            if time.monotonic() >= deadline:
+                sys.exit(str(error))
+        time.sleep(0.25)
 
 if os.environ["DISPLAY_BACKEND"] == "wayland":
     deadline = time.monotonic() + 60
@@ -76,6 +458,9 @@ if os.environ["DISPLAY_BACKEND"] == "wayland":
                     f"output.{remote['id']}.position.0,0",
                     f"output.{remote['id']}.priority.1",
                 ]
+                if scaled_frontend():
+                    # KWin's output policy can replace KRFB's requested scale.
+                    commands.append(f"output.{remote['id']}.scale.{frontend_scale()}")
                 commands += [
                     f"output.{item['id']}.disable"
                     for item in items

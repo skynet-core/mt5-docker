@@ -20,6 +20,7 @@ class SourceLintTests(unittest.TestCase):
         cases = [
             ("module.sh", "echo ok\n", "shell"),
             ("module.py", "print('ok')\n", "python"),
+            ("module.c", "int main(void) {return 0;}\n", "c"),
             ("module.cpp", "int main() {}\n", "c++"),
             ("module.hpp", "#pragma once\n", "c++"),
             ("script", "#!/bin/sh\n", "shell"),
@@ -46,11 +47,14 @@ class SourceLintTests(unittest.TestCase):
                 "new file.py",
                 "tests/test_runtime.py",
                 "vendor/kde-container/test/helper.py",
+                "vendor/kde-container/test/helper.c",
                 "artifacts/generated.py",
             ):
                 path = root / name
                 path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_text("pass\n")
+                path.write_text(
+                    "int test(void) {return 0;}\n" if name.endswith(".c") else "pass\n"
+                )
             vendor = root / "vendor/helper"
             vendor.parent.mkdir(exist_ok=True)
             vendor.write_text("#!/usr/bin/python3\n")
@@ -67,6 +71,7 @@ class SourceLintTests(unittest.TestCase):
                         "./vendor/helper",
                         "./vendor/kde-container/test/helper.py",
                     ],
+                    "c": ["./vendor/kde-container/test/helper.c"],
                     "c++": [],
                 },
             )
@@ -75,6 +80,7 @@ class SourceLintTests(unittest.TestCase):
         for name in (
             "tests/test_runtime.py",
             "./tests/display-matrix.sh",
+            "vendor/kde-container/test/helper.c",
             "vendor/kde-container/test/helper.cpp",
             "vendor/kde-container/native/ui-fixture.cpp",
             "vendor/kde-container/native/vnc-benchmark.cpp",
@@ -84,6 +90,7 @@ class SourceLintTests(unittest.TestCase):
         for name in (
             "build/coverage_report.py",
             "build/test-runner.py",
+            "native/production.c",
             "vendor/kde-container/native/clipboard.cpp",
             "vendor/kde-container/compat/wayland-pointer-enter.cpp",
         ):
@@ -98,6 +105,7 @@ class SourceLintTests(unittest.TestCase):
                 return_value={
                     "shell": ["./a.sh"],
                     "python": ["./b.py"],
+                    "c": ["./native.c"],
                     "c++": ["./c.cpp"],
                 },
             ),
@@ -111,6 +119,27 @@ class SourceLintTests(unittest.TestCase):
         ):
             self.assertEqual(LINT.main(), 1)
         self.assertEqual(run.call_args_list[-1].args[0][-1], "./c.cpp")
+        c_commands = [
+            call.args[0]
+            for call in run.call_args_list
+            if "--language=c" in call.args[0]
+        ]
+        self.assertEqual(len(c_commands), 1)
+        self.assertIn("--std=c11", c_commands[0])
+        self.assertNotIn("--library=qt", c_commands[0])
+        self.assertEqual(c_commands[0][-1], "./native.c")
+
+    def test_empty_language_groups_do_not_invoke_tools_without_sources(self):
+        with (
+            patch.object(
+                LINT,
+                "sources",
+                return_value={"shell": [], "python": [], "c": [], "c++": []},
+            ),
+            patch.object(LINT.subprocess, "run") as run,
+        ):
+            self.assertEqual(LINT.main(), 0)
+        run.assert_not_called()
 
 
 if __name__ == "__main__":

@@ -1,5 +1,6 @@
 """Market acceptance requires painted browser content and matching real display pixels."""
 
+import base64
 import ctypes
 import io
 import json
@@ -61,6 +62,233 @@ class MarketRenderingTests(unittest.TestCase):
         result = self.ready()
         result["frames"]["count"] = 0
         self.assertFalse(mt5_market_probe.page_ready(result))
+
+    def snapshot(self, size=(741, 339), dpr=1):
+        result = self.ready()
+        result["dom"].update(size=list(size), dpr=dpr)
+        result["native"] = {
+            "desktop": [0, 0, 1280, 960],
+            "main": 123,
+            "browser": [506, 219, 506 + size[0], 219 + size[1]],
+        }
+        return result
+
+    def observe_snapshots(self, candidates, *, timeout=False):
+        targets = [
+            {"url": "file://terminal64.exe/market.html", "webSocketDebuggerUrl": "page"}
+        ]
+        requests, doms, images, states, native_sizes = [], [], [], [], []
+        native_images = []
+        for candidate in candidates:
+            value = candidate["value"]
+            doms.extend([candidate.get("dom_before", value["dom"]), value["dom"]])
+            pixels = io.BytesIO()
+            self.frame().resize(candidate.get("cdp_size", value["dom"]["size"])).save(
+                pixels, "PNG"
+            )
+            images.append(base64.b64encode(pixels.getvalue()).decode())
+            states.extend(
+                [
+                    candidate.get("before", value["native"]),
+                    value["native"],
+                    candidate.get("after", value["native"]),
+                ]
+            )
+            native_sizes.append(candidate.get("native_size"))
+            native_images.append(candidate.get("native_image"))
+        doms, images, states, native_sizes = (
+            iter(doms),
+            iter(images),
+            iter(states),
+            iter(native_sizes),
+        )
+        native_images = iter(native_images)
+        socket = MagicMock()
+        socket.send.side_effect = lambda text: requests.append(json.loads(text))
+
+        def reply(**_kwargs):
+            request = requests[-1]
+            if request["method"] == "Runtime.evaluate":
+                value = (
+                    {"count": 30}
+                    if request["params"].get("awaitPromise")
+                    else next(doms)
+                )
+                result = {"result": {"value": value}}
+            elif request["method"] == "Page.captureScreenshot":
+                result = {"data": next(images)}
+            else:
+                self.assertEqual(request["method"], "Browser.getBrowserCommandLine")
+                result = {"arguments": ["--disable-gpu"]}
+            return json.dumps({"id": request["id"], "result": result})
+
+        socket.recv.side_effect = reply
+        connection = MagicMock()
+        connection.__enter__.return_value = socket
+        with tempfile.TemporaryDirectory() as directory:
+
+            def path(value):
+                return Path(directory) / value.split("\\")[-1]
+
+            def capture(capture=False):
+                state = next(states, candidates[-1]["value"]["native"])
+                if capture:
+                    rectangle = state["browser"]
+                    size = next(native_sizes, None) or (
+                        rectangle[2] - rectangle[0],
+                        rectangle[3] - rectangle[1],
+                    )
+                    image = next(native_images, candidates[-1].get("native_image"))
+                    (image if image is not None else self.frame().resize(size)).save(
+                        path("market-native.png")
+                    )
+                return state
+
+            with (
+                patch.object(mt5_market_probe, "Path", side_effect=path),
+                patch.object(mt5_market_probe, "native", side_effect=capture),
+                patch.object(mt5_market_probe, "native_input") as input_event,
+                patch.object(
+                    mt5_market_probe.time,
+                    "monotonic",
+                    side_effect=[0] * (len(candidates) + 1) + [61],
+                ),
+                patch.object(mt5_market_probe.time, "sleep") as sleep,
+                patch.object(
+                    mt5_market_probe.urllib.request,
+                    "urlopen",
+                    side_effect=lambda url, **_kwargs: io.StringIO(
+                        json.dumps(
+                            targets
+                            if url.endswith("/list")
+                            else {"webSocketDebuggerUrl": "browser"}
+                        )
+                    ),
+                ),
+                patch("websockets.sync.client.connect", return_value=connection),
+            ):
+                if timeout:
+                    with self.assertRaisesRegex(RuntimeError, "Market never produced"):
+                        mt5_market_probe.observe()
+                    result = None
+                else:
+                    result = mt5_market_probe.observe()
+                input_event.assert_not_called()
+            log = [
+                json.loads(line)
+                for line in path("market-cdp.jsonl").read_text().splitlines()
+            ]
+        return result, log, requests, sleep.call_count
+
+    def test_observer_rejects_exact_ci_mixed_resize_then_accepts_current_snapshot(self):
+        stale = self.snapshot()
+        stale["native"] = self.snapshot((591, 276))["native"]
+        self.assertTrue(mt5_market_probe.page_ready(stale))
+        current = self.snapshot((591, 276))
+        result, log, requests, sleeps = self.observe_snapshots(
+            [{"value": stale}, {"value": current, "dom_before": stale["dom"]}]
+        )
+        self.assertEqual(result["dom"]["size"], [591, 276])
+        self.assertEqual(len(log), 1)
+        self.assertIn("not_ready", log[0])
+        self.assertEqual(log[0]["dom"]["size"], [741, 339])
+        self.assertEqual(
+            sum(item["method"] == "Page.captureScreenshot" for item in requests), 2
+        )
+        self.assertEqual(sleeps, 1)
+
+    def test_observer_accepts_coherent_initial_and_resized_geometry(self):
+        for size in ((741, 339), (591, 276)):
+            with self.subTest(size=size):
+                result, log, _requests, sleeps = self.observe_snapshots(
+                    [{"value": self.snapshot(size)}]
+                )
+                self.assertEqual(result["dom"]["size"], list(size))
+                self.assertEqual(log, [])
+                self.assertEqual(sleeps, 0)
+
+    def test_observer_rejects_native_geometry_changes_across_capture(self):
+        current = self.snapshot((591, 276))
+        for side in ("before", "after"):
+            with self.subTest(side=side):
+                moved = {**current["native"], "browser": [507, 219, 1098, 495]}
+                result, log, _requests, sleeps = self.observe_snapshots(
+                    [{"value": current, side: moved}, {"value": current}]
+                )
+                self.assertEqual(result["dom"]["size"], [591, 276])
+                self.assertEqual(len(log), 1)
+                self.assertEqual(sleeps, 1)
+
+    def test_observer_persistent_snapshot_mismatch_times_out_without_input(self):
+        stale = self.snapshot()
+        stale["native"] = self.snapshot((591, 276))["native"]
+        current = self.snapshot()
+        loading = Image.new("RGB", current["dom"]["size"], "white")
+        ImageDraw.Draw(loading).arc((365, 164, 375, 174), 0, 270, fill="gray", width=2)
+        for candidate in (
+            {"value": stale},
+            {"value": current, "native_image": loading},
+        ):
+            with self.subTest(candidate=candidate):
+                result, log, requests, sleeps = self.observe_snapshots(
+                    [candidate], timeout=True
+                )
+                self.assertIsNone(result)
+                self.assertEqual(len(log), 1)
+                self.assertIn("not_ready", log[0])
+                self.assertNotIn(
+                    "Browser.getBrowserCommandLine",
+                    [item["method"] for item in requests],
+                )
+                self.assertEqual(sleeps, 1)
+                if "native_image" in candidate:
+                    self.assertIn("blank or chart bleed", log[0]["not_ready"])
+                    self.assertEqual(log[0]["native"], current["native"])
+
+    def test_observer_projects_fractional_dpr_to_nearest_physical_pixel(self):
+        for dpr, physical in ((1.25, (126, 69)), (1.5, (152, 83)), (2, (202, 110))):
+            with self.subTest(dpr=dpr):
+                value = self.snapshot((101, 55), dpr=dpr)
+                value["native"] = self.snapshot(physical)["native"]
+                result, log, _requests, sleeps = self.observe_snapshots(
+                    [{"value": value, "cdp_size": physical}]
+                )
+                self.assertEqual(result["snapshot"]["cdp_size"], list(physical))
+                self.assertEqual(log, [])
+                self.assertEqual(sleeps, 0)
+
+    def test_observer_rejects_stale_native_bitmap_and_newly_hidden_dom(self):
+        current = self.snapshot((591, 276))
+        hidden = self.snapshot((591, 276))
+        hidden["dom"]["visible"] = "hidden"
+        loading = Image.new("RGB", current["dom"]["size"], "white")
+        ImageDraw.Draw(loading).arc((290, 132, 300, 142), 0, 270, fill="gray", width=2)
+        for candidate in (
+            {"value": current, "native_size": (741, 339)},
+            {"value": hidden, "dom_before": current["dom"]},
+            {"value": current, "native_image": loading},
+        ):
+            with self.subTest(candidate=candidate):
+                result, log, _requests, sleeps = self.observe_snapshots(
+                    [candidate, {"value": current}]
+                )
+                self.assertEqual(result["dom"]["size"], [591, 276])
+                self.assertEqual(len(log), 1)
+                self.assertEqual(sleeps, 1)
+                if "native_image" in candidate:
+                    self.assertIn("blank or chart bleed", log[0]["not_ready"])
+                    self.assertEqual(log[0]["native"], current["native"])
+
+    def test_snapshot_requires_a_native_browser_and_valid_positive_dpr(self):
+        for dpr in (0, -1, float("nan"), float("inf")):
+            with self.subTest(dpr=dpr):
+                value = self.snapshot(dpr=dpr)
+                value["snapshot"] = {}
+                self.assertFalse(mt5_market_probe.snapshot_ready(value))
+        value = self.snapshot()
+        value["snapshot"] = {}
+        del value["native"]["browser"]
+        self.assertFalse(mt5_market_probe.snapshot_ready(value))
 
     def test_blank_white_chart_bleed_and_tiled_content_are_rejected(self):
         reference = self.frame()

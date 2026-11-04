@@ -20,21 +20,23 @@ SOFTWARE_RENDERERS = (
 )
 
 
-def requires_software(backend, mode):
+def requires_software(backend, mode, selected):
     """KWin 6.3's NVIDIA virtual-output path crashes during remote capture."""
-    if backend != "wayland" or mode not in ("vnc", "web"):
+    if (
+        backend != "wayland"
+        or mode not in ("vnc", "web")
+        or not selected
+        or not selected.get("hardware")
+        or not selected.get("vendor", "").startswith("NVIDIA")
+    ):
         return False
-    if Path("/opt/kwin-6.8.2/bin/kwin_wayland").is_file():
+    if (
+        os.environ.get("TARGET_APP")
+        and Path("/opt/kwin-6.8.2/bin/kwin_wayland").is_file()
+    ):
         return False
     release = platform.freedesktop_os_release()
-    return (
-        release.get("ID") == "debian"
-        and release.get("VERSION_ID") == "13"
-        and any(
-            vendor.read_text().strip() == "0x10de"
-            for vendor in Path("/sys/class/drm").glob("renderD*/device/vendor")
-        )
-    )
+    return release.get("ID") == "debian" and release.get("VERSION_ID") == "13"
 
 
 def probe(device):
@@ -190,7 +192,14 @@ def select_device(devices):
 
 def main():
     if len(sys.argv) == 4 and sys.argv[1] == "--requires-software":
-        return 0 if requires_software(sys.argv[2], sys.argv[3]) else 1
+        try:
+            selected = json.load(sys.stdin)["selected"]
+            if selected is not None and not isinstance(selected, dict):
+                raise ValueError("selected GPU must be an object or null")
+        except (KeyError, TypeError, ValueError) as error:
+            print(f"Invalid GPU probe report: {error}", file=sys.stderr)
+            return 2
+        return 0 if requires_software(sys.argv[2], sys.argv[3], selected) else 1
     if len(sys.argv) == 2:
         try:
             result = probe(sys.argv[1])

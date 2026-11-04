@@ -154,6 +154,14 @@ set_tests_properties(pointer-enter-wire-warp-baseline pointer-enter-wire-warp-fi
 add_executable(fixture-unit fixture-unit.cpp)
 find_program(TIGERVNC_TEST_PROGRAM NAMES viewport-enter
     PATHS /tigervnc-build/vncviewer NO_DEFAULT_PATH REQUIRED)
+find_program(XWAYLAND_POINTER_TEST_PROGRAM NAMES pointer-unit
+    PATHS /xwayland-build/pointer-unit NO_DEFAULT_PATH REQUIRED)
+add_test(NAME xwayland-pointer-precision COMMAND "${XWAYLAND_POINTER_TEST_PROGRAM}")
+set_tests_properties(xwayland-pointer-precision PROPERTIES TIMEOUT 30)
+find_program(XWAYLAND_READY_TEST_PROGRAM NAMES pointer-unit
+    PATHS /xwayland-build/rootful-ready-unit NO_DEFAULT_PATH REQUIRED)
+add_test(NAME xwayland-rootful-readiness COMMAND "${XWAYLAND_READY_TEST_PROGRAM}")
+set_tests_properties(xwayland-rootful-readiness PROPERTIES TIMEOUT 30)
 add_test(NAME tigervnc-pointer-enter COMMAND "${TIGERVNC_TEST_PROGRAM}")
 set_tests_properties(tigervnc-pointer-enter PROPERTIES TIMEOUT 30)
 find_program(TIGERVNC_CRYPTO_TEST_PROGRAM NAMES viewer-crypto
@@ -192,6 +200,22 @@ endif()
 if(KRFB_SOURCE_DIR)
     find_package(KF6CoreAddons REQUIRED)
     find_path(RFB_INCLUDE_DIR rfb.h PATH_SUFFIXES rfb REQUIRED)
+
+    pkg_check_modules(VNC REQUIRED IMPORTED_TARGET libvncserver)
+    file(READ "${KRFB_SOURCE_DIR}/krfb/rfbserver.cpp" damage_source)
+    string(REGEX MATCHALL "void RfbServer::updateScreen\\(" damage_starts "${damage_source}")
+    list(LENGTH damage_starts damage_count)
+    string(REGEX MATCH "void RfbServer::updateScreen\\(const QList<QRect> &modifiedTiles\\)\n\\{(\n[ \t][^\n]*)*\n\\}"
+        damage_method "${damage_source}")
+    if(NOT damage_count EQUAL 1 OR NOT damage_method)
+        message(FATAL_ERROR "Expected exactly one complete pinned RfbServer::updateScreen method")
+    endif()
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${KRFB_SOURCE_DIR}/krfb/rfbserver.cpp")
+    file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/krfb-damage-method.inc" "${damage_method}\n")
+    add_executable(krfb-damage-unit krfb-damage-unit.cpp)
+    target_include_directories(krfb-damage-unit PRIVATE "${RFB_INCLUDE_DIR}" "${CMAKE_CURRENT_BINARY_DIR}")
+    target_link_libraries(krfb-damage-unit PRIVATE Qt6::Core PkgConfig::VNC)
+    add_test(NAME krfb-damage-edges COMMAND krfb-damage-unit)
     file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/krfbprivate_export.h" "#pragma once\n#define KRFBPRIVATE_EXPORT\n")
     add_library(krfb-test-api STATIC
         "${KRFB_SOURCE_DIR}/krfb/events.cpp" "${KRFB_SOURCE_DIR}/krfb/eventsplugin.cpp")

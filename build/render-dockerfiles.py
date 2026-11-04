@@ -11,7 +11,7 @@ FROM ghcr.io/skynet-core/systemd:debian-13 AS kwin-build-dependencies
 SHELL ["/bin/bash", "-e", "-u", "-o", "pipefail", "-c"]
 COPY build/install-packages /build-support/install-packages
 COPY build/packages/debian/kwin-build.txt /build-support/packages/kwin-build.txt
-RUN /build-support/install-packages kwin-build
+RUN bash /build-support/install-packages kwin-build
 COPY build/kwin-6.8.2 build/kwin-6.8.2-sources.tsv /build-support/
 FROM kwin-build-dependencies AS kwin-platform
 COPY build/kwin-phases/platform.sh /build-support/kwin-phase-platform.sh
@@ -30,7 +30,7 @@ COPY build/kwin-phases/frameworks.sh /build-support/kwin-phase-frameworks.sh
 RUN /build-support/kwin-6.8.2 frameworks
 FROM kwin-frameworks AS kwin-build
 COPY build/packages/debian/kwin-final-build.txt /build-support/packages/kwin-final-build.txt
-RUN /build-support/install-packages kwin-final-build
+RUN bash /build-support/install-packages kwin-final-build
 COPY build/kwin-vulkan-sources.tsv /build-support/kwin-vulkan-sources.tsv
 RUN cat /build-support/kwin-vulkan-sources.tsv >> /build-support/kwin-6.8.2-sources.tsv
 COPY build/kwin-phases/kwin.sh /build-support/kwin-phase-kwin.sh
@@ -45,6 +45,7 @@ APT_KWIN_SELECTION = """# Select the dependency graph before building, so distro
 FROM kwin-artifacts AS kwin-source
 RUN install -d /out/root/etc/plasma \\
     && touch /out/root/etc/plasma/opengl-software-capture
+# DISTRO_KWIN_SOURCE_MARKER
 FROM desktop-packages AS kwin-distro
 # DISTRO_KWIN_MARKER
 # KWIN_VARIANT selects one of the two internal stages above.
@@ -86,6 +87,11 @@ def render(template, distro, family):
             "RUN bash /build-support/install-winehq",
         )
         selection = APT_KWIN_SELECTION.replace(
+            "# DISTRO_KWIN_SOURCE_MARKER",
+            "RUN touch /out/root/etc/plasma/vnc-existing-output"
+            if family == "debian"
+            else "",
+        ).replace(
             "# DISTRO_KWIN_MARKER",
             "RUN install -d /out/root/etc/plasma \\\n"
             "    && touch /out/root/etc/plasma/vnc-existing-output"

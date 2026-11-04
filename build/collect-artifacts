@@ -12,11 +12,13 @@ vnc)
 	viewer=$(command -v vncviewer || command -v xtigervncviewer)
 	install -Dm755 "$(readlink -f -- "$viewer")" /out/root/usr/bin/vncviewer
 	dependencies=$(ldd "$viewer")
+	frontend_dependencies=$(ldd /xwayland-build/hw/xwayland/Xwayland)
+	dependencies+=$'\n'"$frontend_dependencies"
 	if [[ $dependencies == *'not found'* ]]; then
 		printf '%s\n' "$dependencies" >&2
 		exit 1
 	fi
-	# Copy only viewer libraries absent from the runtime, excluding server packages.
+	# Copy only private viewer/frontend libraries absent from the runtime.
 	while IFS= read -r library; do
 		if [[ ! -e /desktop-baseline$library ]]; then
 			# Keep the loader's SONAME while resolving merged-/usr directory links.

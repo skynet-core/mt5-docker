@@ -13,8 +13,8 @@ from pathlib import Path
 from clipboard import configuration
 from display_matrix import DISTROS, case_path, check_os_release, profiles
 from mt5_input import BrowserClient, Probe, connect, control_point, wait_state
-from mt5_market_probe import page_ready
-from PIL import Image, ImageChops, ImageStat
+from mt5_market_probe import compare_frame, page_ready
+from PIL import Image
 from runtime import (
     capture_metadata,
     collect,
@@ -59,35 +59,6 @@ try:
     x.XSync(d,0)
 finally: x.XCloseDisplay(d)
 """
-
-
-def compare_frame(reference, observed):
-    if reference.size != observed.size:
-        raise RuntimeError("Market browser and display crop dimensions disagree")
-    if reference.convert("RGBA").getchannel("A").getextrema() != (255, 255):
-        raise RuntimeError("Market browser screenshot is transparent")
-    reference, observed = reference.convert("RGB"), observed.convert("RGB")
-    ink = reference.convert("L").point(lambda value: 255 if value < 200 else 0)
-    count = ink.histogram()[255]
-    if count < 64:
-        raise RuntimeError("Market browser screenshot has no painted text/content")
-    if not any(ImageStat.Stat(reference).stddev):
-        raise RuntimeError("Market browser screenshot has no painted contrast")
-    difference = ImageChops.difference(reference, observed)
-    red, green, blue = difference.split()
-    maximum = ImageChops.lighter(red, ImageChops.lighter(green, blue))
-    matches = ImageChops.multiply(
-        ink, maximum.point(lambda value: 255 if value <= 48 else 0)
-    )
-    evidence = {
-        "mean_error": sum(ImageStat.Stat(difference).mean) / 3,
-        "painted_pixel_match": matches.histogram()[255] / count,
-    }
-    if evidence["mean_error"] > 12 or evidence["painted_pixel_match"] < 0.9:
-        raise RuntimeError(
-            "Market display does not match the painted browser; blank or chart bleed"
-        )
-    return {"passed": True, **evidence}
 
 
 def browser_crop(image, native):

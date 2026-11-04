@@ -399,7 +399,7 @@ async def validate(args):
             )
             require(start < end, "Backtest start must precede its end")
             # Model 1 needs M1 history; a first download can complete after the API returns.
-            deadline = time.monotonic() + 180
+            deadline = time.monotonic() + args.timeout
             while True:
                 historical = None
                 try:
@@ -477,31 +477,21 @@ async def validate(args):
 
         # Xwayland is rootless: capture MT5's window, rather than its empty root desktop.
         checkpoint("application-screenshot")
-        wine(
-            r"C:\Python\python.exe",
-            "-c",
-            "import win32gui; from PIL import ImageGrab; windows=[]; "
-            "win32gui.EnumWindows(lambda h,_: windows.append(h) if "
-            "win32gui.IsWindowVisible(h) and "
-            "win32gui.GetClassName(h)=='MetaQuotes::MetaTrader::5.00' else None,None); "
-            "assert windows, 'No MT5 window'; "
-            r"ImageGrab.grab(window=windows[0]).save(r'C:\MT5\validation-window.png')",
+        await application_screenshot(
+            wine, copy, output / "application.png", args.timeout
         )
-        copy(f"{MT5}/validation-window.png", output / "application.png")
-        with Image.open(output / "application.png") as image:
-            require(
-                image.width >= 640 and image.height >= 480, "Screenshot is too small"
-            )
-            require(
-                len(image.convert("RGB").getcolors(image.width * image.height)) > 128,
-                "Screenshot is blank",
-            )
         evidence["screenshot"] = "application.png"
 
         if args.native_url:
             checkpoint("native-mcp")
             await inspect_native(args, evidence, save)
         await backtest(args, docker, copy, wine, output, evidence, checkpoint)
+        # The tester shuts down MT5; remote checks need the restored application.
+        checkpoint("application-restored")
+        await application_screenshot(
+            wine, copy, output / "application-restored.png", args.timeout
+        )
+        evidence["restored_screenshot"] = "application-restored.png"
         evidence["passed"] = True
         checkpoint("complete")
     except Exception as exc:
@@ -554,6 +544,40 @@ async def inspect_native(args, evidence, save):
             tool.name: tool.inputSchema for tool in (await session.list_tools()).tools
         }
         save()
+
+
+async def application_screenshot(wine, copy, destination, timeout):
+    deadline = time.monotonic() + timeout
+    error = "MT5 window did not become ready"
+    while True:
+        remaining = deadline - time.monotonic()
+        require(remaining > 0, error)
+        result = wine(
+            r"C:\Python\python.exe",
+            "-c",
+            "import win32gui; from PIL import ImageGrab; windows=[]; "
+            "win32gui.EnumWindows(lambda h,_: windows.append(h) if "
+            "win32gui.IsWindowVisible(h) and "
+            "win32gui.GetClassName(h)=='MetaQuotes::MetaTrader::5.00' else None,None); "
+            "assert windows, 'No MT5 window'; "
+            r"ImageGrab.grab(window=windows[0]).save(r'C:\MT5\validation-window.png')",
+            timeout=min(120, remaining),
+            check=False,
+        )
+        destination.with_suffix(".log").write_bytes(result.stdout + result.stderr)
+        if result.returncode == 0:
+            copy(f"{MT5}/validation-window.png", destination)
+            with Image.open(destination) as image:
+                if image.width < 640 or image.height < 480:
+                    error = "Screenshot is too small"
+                elif (
+                    len(image.convert("RGB").getcolors(image.width * image.height))
+                    <= 128
+                ):
+                    error = "Screenshot is blank"
+                else:
+                    return
+        await asyncio.sleep(2)
 
 
 async def backtest(args, docker, copy, wine, output, evidence, checkpoint):
@@ -666,7 +690,12 @@ def main():
     parser.add_argument("--symbol", default="EURUSD")
     parser.add_argument("--start", default="2026.09.01")
     parser.add_argument("--end", default="2026.09.08")
-    parser.add_argument("--timeout", type=int, default=600)
+    parser.add_argument(
+        "--timeout",
+        type=int,
+        default=600,
+        help="Seconds per history, screenshot, or report wait",
+    )
     args = parser.parse_args()
     require(
         re.fullmatch(r"[a-zA-Z0-9_.-]+", args.case) and args.case not in (".", ".."),

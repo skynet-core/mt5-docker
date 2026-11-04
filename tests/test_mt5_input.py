@@ -790,6 +790,25 @@ class BrowserTransportTests(unittest.TestCase):
         browser.close.assert_called_once()
         driver.stop.assert_called_once()
 
+    def test_private_network_raw_vnc_uses_real_protocol_client(self):
+        from test_python_coverage_rfb import Wire, handshake
+
+        wire = Wire(handshake())
+        with (
+            patch.object(
+                mt5_input,
+                "execute",
+                return_value=SimpleNamespace(stdout=b"172.23.0.7\n"),
+            ),
+            patch("rfb.socket.create_connection", return_value=wire) as connect,
+        ):
+            client = mt5_input.connect("docker", "private", "vnc", Path("/private"))
+        self.addCleanup(client.close)
+        connect.assert_called_once_with(("172.23.0.7", 5900), timeout=20)
+        self.assertEqual(
+            (client.width, client.height, client.name), (3, 2, "private framebuffer")
+        )
+
     def test_private_network_address_selects_browser_or_raw_vnc(self):
         with (
             patch.object(

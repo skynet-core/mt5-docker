@@ -178,6 +178,34 @@ class DockerfileRenderingTests(unittest.TestCase):
                     self.assertIn("ARG KWIN_VARIANT=source", result)
                     self.assertIn("FROM kwin-${KWIN_VARIANT} AS kwin-selected", result)
 
+        for recipe in (
+            template,
+            *(generator.render(template, d, f) for d, f in generator.DISTROS.items()),
+        ):
+            self.assertIn("ARG XWAYLAND_FRONTEND_VERSION=24.1.14", recipe)
+            self.assertIn(
+                "ARG XWAYLAND_FRONTEND_SHA256=4eb6b98d678299a4b96138d886345b294130695760345ef84596225a8224078a",
+                recipe,
+            )
+            self.assertIn(
+                "COPY build/tigervnc-viewer build/xwayland-frontend /build-support/",
+                recipe,
+            )
+            self.assertIn(
+                "COPY vendor/kde-container/patches/xwayland-pointer-precision.patch vendor/kde-container/patches/xwayland-rootful-ready.patch /tmp/",
+                recipe,
+            )
+            self.assertIn(
+                "COPY vendor/kde-container/test/xwayland-pointer-unit.c vendor/kde-container/test/xwayland-pointer-unit.py vendor/kde-container/test/xwayland-rootful-ready-unit.c /build-support/",
+                recipe,
+            )
+            self.assertLess(
+                recipe.index("&& /build-support/xwayland-frontend"),
+                recipe.index("&& /build-support/collect-artifacts vnc"),
+            )
+            self.assertIn("COPY --from=vnc-build /out/root/ /", recipe)
+            self.assertIn("ldd /usr/local/libexec/plasma-xwayland", recipe)
+
     def test_check_reports_missing_or_stale_files_without_rewriting(self):
         generator = load("build/render-dockerfiles.py")
         with tempfile.TemporaryDirectory() as directory:
@@ -229,7 +257,14 @@ class LintEntrypointTests(unittest.TestCase):
 
         with (
             patch.object(
-                lint, "sources", return_value={"shell": [], "python": [], "c++": []}
+                lint,
+                "sources",
+                return_value={
+                    "shell": ["./a.sh"],
+                    "python": ["./b.py"],
+                    "c": ["./d.c"],
+                    "c++": ["./c.cpp"],
+                },
             ),
             patch.object(lint.subprocess, "run", side_effect=invoke),
             contextlib.redirect_stdout(io.StringIO()) as output,
@@ -238,6 +273,7 @@ class LintEntrypointTests(unittest.TestCase):
         self.assertIn("run uv sync --locked", output.getvalue())
         self.assertTrue(any(command[0] == "shellcheck" for command in visited))
         self.assertTrue(any(command[0] == "cppcheck" for command in visited))
+        self.assertTrue(any("--language=c" in command for command in visited))
 
     def test_unknown_shebang_is_not_classified_as_python_or_shell(self):
         lint = load("build/lint.py")

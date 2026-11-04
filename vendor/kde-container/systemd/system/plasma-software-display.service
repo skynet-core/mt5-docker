@@ -1,5 +1,5 @@
 [Unit]
-Description=Private display for Wayland software rendering
+Description=Private backing or presentation display for Wayland
 Requires=plasma-dbus.service
 After=plasma-dbus.service
 Before=plasma-session.service
@@ -8,7 +8,9 @@ Before=plasma-session.service
 Type=exec
 User=plasma
 EnvironmentFile=/etc/plasma/session.env
-ExecCondition=/usr/bin/test ${PLASMA_SOFTWARE_CAPTURE} = 1
+ExecCondition=/usr/local/libexec/plasma-software-display --check
 ExecStart=/usr/local/libexec/plasma-software-display
-Restart=on-failure
+ExecStartPost=/usr/local/libexec/plasma-remote-output --prepare
+# Reopen the nested frontend after a normal window close, as the presenter did.
+Restart=always
 RestartSec=3

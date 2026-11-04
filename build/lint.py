@@ -23,6 +23,8 @@ def language(path):
         return "shell"
     if path.suffix in {".py", ".pyi"}:
         return "python"
+    if path.suffix == ".c":
+        return "c"
     if path.suffix in {".cpp", ".cc", ".cxx", ".C", ".h", ".hpp", ".hh", ".hxx"}:
         return "c++"
     with path.open("rb") as stream:
@@ -43,7 +45,7 @@ def sources(root=ROOT):
         ["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z"],
         cwd=root,
     )
-    groups = {"shell": [], "python": [], "c++": []}
+    groups = {"shell": [], "python": [], "c": [], "c++": []}
     for name in sorted(set(os.fsdecode(files).split("\0")) - {""}):
         path = root / name
         if path.is_file() and (kind := language(path)):
@@ -56,6 +58,13 @@ def main():
     checks = {
         "shell": ["shellcheck"],
         "python": ["ruff", "check"],
+        "c": [
+            "cppcheck",
+            "--enable=warning,performance,portability",
+            "--error-exitcode=1",
+            "--std=c11",
+            "--language=c",
+        ],
         "c++": [
             "cppcheck",
             "--enable=warning,performance,portability",
@@ -67,6 +76,8 @@ def main():
     }
     failed = False
     for kind, command in checks.items():
+        if not groups[kind]:
+            continue
         print(f"\n{kind}: {len(groups[kind])} source files", flush=True)
         try:
             subprocess.run([command[0], "--version"], cwd=ROOT, check=True)

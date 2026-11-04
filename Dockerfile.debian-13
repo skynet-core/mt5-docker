@@ -17,7 +17,8 @@ SHELL ["/bin/bash", "-e", "-u", "-o", "pipefail", "-c"]
 COPY build/install-packages build/create-user build/normalize-runtime build/websockify-requirements.txt /build-support/
 COPY build/packages/debian/desktop.txt /build-support/packages/desktop.txt
 RUN --mount=type=bind,from=uv,source=/uv,target=/usr/local/bin/uv \
-    /build-support/install-packages desktop \
+    chmod +x /build-support/* \
+    && /build-support/install-packages desktop \
     && /build-support/normalize-runtime \
     && /build-support/create-user \
     && curl --fail --location --retry 3 \
@@ -62,12 +63,16 @@ RUN c++ -shared -fPIC -O2 /src/compat/xtest-paced.cpp -lX11 -ldl -o /xtest-paced
     && LD_LIBRARY_PATH=/fake-egl python3 -c 'import os, subprocess; [subprocess.run(["/test-egl-fence", "/egl-fence-wait.so"], env={**os.environ, "FAKE_EGL_VENDOR": vendor}, timeout=5, check=True) for vendor in ("NVIDIA", "Mesa")]'
 
 FROM input-source AS vnc-build
+ARG XWAYLAND_FRONTEND_VERSION=24.1.14
+ARG XWAYLAND_FRONTEND_SHA256=4eb6b98d678299a4b96138d886345b294130695760345ef84596225a8224078a
 ARG TIGERVNC_VIEWER_VERSION=1.16.0
 ARG TIGERVNC_VIEWER_SHA256=10512fc0254ae3bde41c19d18c15f7ebd8cd476261afe0611c41965d635d46e8
 COPY build/packages/debian/vnc-build.txt /build-support/packages/vnc-build.txt
 RUN /build-support/install-packages vnc-build
 COPY build/collect-artifacts /build-support/collect-artifacts
-COPY build/tigervnc-viewer /build-support/tigervnc-viewer
+COPY build/tigervnc-viewer build/xwayland-frontend /build-support/
+COPY vendor/kde-container/patches/xwayland-pointer-precision.patch vendor/kde-container/patches/xwayland-rootful-ready.patch /tmp/
+COPY vendor/kde-container/test/xwayland-pointer-unit.c vendor/kde-container/test/xwayland-pointer-unit.py vendor/kde-container/test/xwayland-rootful-ready-unit.c /build-support/
 COPY vendor/kde-container/patches/tigervnc-pointer-enter.patch /tmp/tigervnc-pointer-enter.patch
 COPY vendor/kde-container/patches/tigervnc-digest-sizes.patch /tmp/tigervnc-digest-sizes.patch
 COPY vendor/kde-container/patches/tigervnc-nettle4.patch /tmp/tigervnc-nettle4.patch
@@ -85,6 +90,7 @@ RUN --mount=type=bind,from=desktop-packages,source=/,target=/desktop-baseline,ro
         -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF \
     && cmake --build /krfb-build --parallel 2 --target krfb-virtualmonitor krfb_framebuffer_pw \
     && /build-support/tigervnc-viewer \
+    && /build-support/xwayland-frontend \
     && /build-support/collect-artifacts vnc
 
 # Build once against Debian's older glibc; the private ABI also runs on Ubuntu.
@@ -92,7 +98,7 @@ FROM ghcr.io/skynet-core/systemd:debian-13 AS kwin-build-dependencies
 SHELL ["/bin/bash", "-e", "-u", "-o", "pipefail", "-c"]
 COPY build/install-packages /build-support/install-packages
 COPY build/packages/debian/kwin-build.txt /build-support/packages/kwin-build.txt
-RUN /build-support/install-packages kwin-build
+RUN bash /build-support/install-packages kwin-build
 COPY build/kwin-6.8.2 build/kwin-6.8.2-sources.tsv /build-support/
 FROM kwin-build-dependencies AS kwin-platform
 COPY build/kwin-phases/platform.sh /build-support/kwin-phase-platform.sh
@@ -111,7 +117,7 @@ COPY build/kwin-phases/frameworks.sh /build-support/kwin-phase-frameworks.sh
 RUN /build-support/kwin-6.8.2 frameworks
 FROM kwin-frameworks AS kwin-build
 COPY build/packages/debian/kwin-final-build.txt /build-support/packages/kwin-final-build.txt
-RUN /build-support/install-packages kwin-final-build
+RUN bash /build-support/install-packages kwin-final-build
 COPY build/kwin-vulkan-sources.tsv /build-support/kwin-vulkan-sources.tsv
 RUN cat /build-support/kwin-vulkan-sources.tsv >> /build-support/kwin-6.8.2-sources.tsv
 COPY build/kwin-phases/kwin.sh /build-support/kwin-phase-kwin.sh
@@ -125,6 +131,7 @@ RUN /build-support/kwin-6.8.2 collect
 FROM kwin-artifacts AS kwin-source
 RUN install -d /out/root/etc/plasma \
     && touch /out/root/etc/plasma/opengl-software-capture
+RUN touch /out/root/etc/plasma/vnc-existing-output
 FROM desktop-packages AS kwin-distro
 RUN install -d /out/root/etc/plasma \
     && touch /out/root/etc/plasma/vnc-existing-output
@@ -157,6 +164,9 @@ RUN chmod +x /init.d/modules/*.sh /usr/local/bin/* /usr/local/libexec/* \
     && ldd /usr/bin/vncviewer >/tmp/vncviewer.ldd \
     && ! grep -F 'not found' /tmp/vncviewer.ldd \
     && rm /tmp/vncviewer.ldd \
+    && ldd /usr/local/libexec/plasma-xwayland >/tmp/plasma-xwayland.ldd \
+    && ! grep -F 'not found' /tmp/plasma-xwayland.ldd \
+    && rm /tmp/plasma-xwayland.ldd \
     && if [[ -f /usr/lib/systemd/system/NetworkManager.service ]]; then \
         systemctl --root=/ disable NetworkManager.service; \
     fi \
@@ -197,6 +207,7 @@ ENV MODULE_SYSTEMD_ENABLED=true \
     DISPLAY_WIDTH=1920 \
     DISPLAY_HEIGHT=1080 \
     TARGET_APP=/usr/local/bin/mt5-launch \
+    TARGET_APP_WINDOW_MODE=maximized \
     WINEPREFIX=/home/plasma/.wine \
     WINEDEBUG=-all \
     WINEDLLOVERRIDES="mscoree,mshtml="

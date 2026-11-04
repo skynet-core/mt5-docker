@@ -226,14 +226,19 @@ class ShellInitTests(unittest.TestCase):
     def test_display_profiles_write_the_actual_backend_transport_and_capture_policy(
         self,
     ):
-        for backend, mode, host, software, modern in (
-            ("auto", "headless", "none", "0", False),
-            ("wayland", "vnc", "none", "1", False),
-            ("wayland", "web", "none", "1", True),
-            ("wayland", "nested", "x11", "1", True),
-            ("wayland", "nested", "wayland", "0", True),
-            ("x11", "nested", "x11", "0", False),
-            ("auto", "nested", "x11", "0", False),
+        for backend, mode, host, software, modern, capture, relay in (
+            ("auto", "headless", "none", "0", False, "0", "0"),
+            ("wayland", "vnc", "none", "1", False, "1", "0"),
+            ("wayland", "web", "none", "1", True, "0", "0"),
+            ("wayland", "nested", "x11", "1", True, "0", "1"),
+            ("wayland", "nested", "x11", "0", True, "0", "1"),
+            ("wayland", "nested", "wayland", "0", True, "0", "1"),
+            ("wayland", "nested", "wayland", "1", True, "0", "1"),
+            ("wayland", "nested", "wayland", "1", False, "1", "1"),
+            ("wayland", "nested", "wayland", "0", False, "0", "0"),
+            ("wayland", "nested", "x11", "1", False, "0", "0"),
+            ("x11", "nested", "x11", "0", False, "0", "0"),
+            ("auto", "nested", "x11", "0", False, "0", "0"),
         ):
             with self.subTest(backend=backend, mode=mode, host=host, software=software):
                 result, commands, _, files = self.display(
@@ -258,26 +263,23 @@ class ShellInitTests(unittest.TestCase):
                     else backend
                 )
                 self.assertEqual(session["DISPLAY_BACKEND"], expected_backend)
-                self.assertEqual(
-                    session["PLASMA_SOFTWARE_NESTED"],
-                    str(
-                        int(
-                            mode == "nested"
-                            and host == "x11"
-                            and software == "1"
-                            and modern
-                        )
-                    ),
-                )
+                self.assertEqual(session["LIBGL_ALWAYS_SOFTWARE"], software)
+                self.assertEqual(session["PLASMA_SOFTWARE_CAPTURE"], capture)
+                self.assertEqual(session["PLASMA_SOFTWARE_NESTED"], relay)
+                self.assertEqual(session["PLASMA_SOFTWARE_DISPLAY"], ":110")
+                self.assertEqual(session["PLASMA_X11_DISPLAY"], ":100")
                 if mode != "nested":
                     self.assertEqual(session["CLIPBOARD_SYNC"], "0")
-                if mode in ("vnc", "web"):
+                if mode in ("vnc", "web") or relay == "1":
                     self.assertTrue(
                         any(
                             command[:2] == ["x11vnc", "-storepasswd"]
                             for command in commands
                         )
                     )
+
+                if relay == "1":
+                    self.assertEqual(files["plasma/vnc-password"], b"01234567")
 
     def test_gpu_detection_fallback_nvidia_sync_and_allocator_are_scoped(self):
         for values, private_binary, expected in (
@@ -382,7 +384,7 @@ class ShellInitTests(unittest.TestCase):
                 ]
                 self.assertEqual(len(calls), int(remove))
                 if remove:
-                    self.assertTrue(calls[0][0].endswith("/private/bin/kwin_wayland"))
+                    self.assertTrue(calls[0][0].endswith("/distro-kwin"))
                     self.assertEqual(calls[0][1], "security.capability")
                 session = dict(
                     shlex.split(line)[0].split("=", 1)
@@ -391,15 +393,23 @@ class ShellInitTests(unittest.TestCase):
                 self.assertEqual(session["PLASMA_NVIDIA_SYNC"], nvidia)
 
     def test_capability_removal_is_idempotent_for_private_and_distro_kwin(self):
-        for private_binary in (False, True):
+        for private_binary, target_app in (
+            (False, ""),
+            (True, ""),
+            (False, "/bin/true"),
+            (True, "/bin/true"),
+        ):
             for error in (0, errno.ENODATA):
-                with self.subTest(private_binary=private_binary, error=error):
+                with self.subTest(
+                    private_binary=private_binary, target_app=target_app, error=error
+                ):
                     result, _, _, files = self.display(
                         host="wayland",
                         DISPLAY_MODE="nested",
                         LIBGL_ALWAYS_SOFTWARE="1",
                         private_binary=private_binary,
                         repeat=True,
+                        TARGET_APP=target_app,
                         TEST_CAP_REMOVE_ERROR=str(error),
                     )
                     self.assertEqual(result.returncode, 0, result.stderr)
@@ -411,7 +421,7 @@ class ShellInitTests(unittest.TestCase):
                     self.assertEqual(calls[0], calls[1])
                     expected = (
                         "/private/bin/kwin_wayland"
-                        if private_binary
+                        if private_binary and target_app
                         else "/distro-kwin"
                     )
                     self.assertTrue(calls[0][0].endswith(expected))

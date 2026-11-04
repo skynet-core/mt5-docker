@@ -1,5 +1,13 @@
 #!/usr/bin/bash
 set -euo pipefail
+if [[ ${1:-} == --display ]]; then
+	# The guest portal needs the compositor that starts after this frontend.
+	export DBUS_SESSION_BUS_ADDRESS=unix:path=/dev/null
+	export WAYLAND_DISPLAY=$HOST_WAYLAND_DISPLAY
+	exec /usr/local/libexec/plasma-xwayland "$PLASMA_SOFTWARE_DISPLAY" -auth /etc/plasma/Xauthority \
+		-nolisten tcp -noreset -geometry "${DISPLAY_WIDTH}x${DISPLAY_HEIGHT}" \
+		-shm -decorate -hidpi
+fi
 if [[ ${1:-} == --present ]]; then
 	shift
 	pids=()
@@ -23,13 +31,23 @@ fi
 viewer_options=()
 if [[ $HOST_DISPLAY_BACKEND == wayland ]]; then
 	export WAYLAND_DISPLAY=$HOST_WAYLAND_DISPLAY
-	/usr/bin/Xwayland "$PLASMA_SOFTWARE_DISPLAY" -auth /etc/plasma/Xauthority \
-		-nolisten tcp -noreset -geometry "${DISPLAY_WIDTH}x${DISPLAY_HEIGHT}" -shm &
-	export DISPLAY=$PLASMA_SOFTWARE_DISPLAY XAUTHORITY=/etc/plasma/Xauthority
+	presenter_display=$PLASMA_SOFTWARE_DISPLAY
+	if [[ ${PLASMA_SOFTWARE_CAPTURE:-0} == 1 ]]; then
+		# Keep the visible frontend separate from QPainter's Xvfb backing.
+		presenter_display=$PLASMA_X11_DISPLAY
+	fi
+	if [[ $DISPLAY_BACKEND != wayland || ${PLASMA_SOFTWARE_NESTED:-0} != 1 || ${PLASMA_SOFTWARE_CAPTURE:-0} == 1 ]]; then
+		# Keep the host frontend independent of guest portal startup.
+		DBUS_SESSION_BUS_ADDRESS=unix:path=/dev/null /usr/bin/Xwayland "$presenter_display" -auth /etc/plasma/Xauthority \
+			-nolisten tcp -noreset -geometry "${DISPLAY_WIDTH}x${DISPLAY_HEIGHT}" -shm -decorate &
+	fi
+	export DISPLAY=$presenter_display XAUTHORITY=/etc/plasma/Xauthority
 	/usr/local/libexec/plasma-wait x11
 	viewer_options+=(-FullScreen=1)
 else
-	export DISPLAY=$HOST_DISPLAY XAUTHORITY=$HOST_XAUTHORITY
+	# The host X server has a separate SysV IPC namespace. Use Unix transport
+	# explicitly so TigerVNC falls back from MIT-SHM to normal XPutImage.
+	export DISPLAY="unix/$HOST_DISPLAY" XAUTHORITY=$HOST_XAUTHORITY
 	unset WAYLAND_DISPLAY
 fi
 viewer_help=$(/usr/bin/vncviewer --help 2>&1 || true)

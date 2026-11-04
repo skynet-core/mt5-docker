@@ -316,11 +316,48 @@ class ShellRuntimeTests(unittest.TestCase):
                     self.assertEqual(environment["DISPLAY"], ":41")
 
     def test_software_parent_stays_private_and_disables_tcp(self):
-        result, commands, _, _ = self.run_source(RUNTIME / "plasma-software-display")
+        result, commands, _, _ = self.run_source(
+            RUNTIME / "plasma-software-display",
+            environment={"PLASMA_SOFTWARE_CAPTURE": "1"},
+        )
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(commands[-1][:2], ["/usr/bin/Xvfb", ":110"])
         self.assertIn("800x600x24", commands[-1])
         self.assertIn("-nolisten", commands[-1])
+        result, commands, _, _ = self.run_source(RUNTIME / "plasma-software-display")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            commands[-1], ["/usr/local/libexec/plasma-nested-x11", "--display"]
+        )
+        result, commands, _, _ = self.run_source(
+            RUNTIME / "plasma-nested-x11", arguments=("--display",)
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            commands[-1][:2], ["/usr/local/libexec/plasma-xwayland", ":110"]
+        )
+        for flag in ("-auth", "-nolisten", "-shm", "-decorate", "-hidpi"):
+            self.assertIn(flag, commands[-1])
+        self.assertIn("800x600", commands[-1])
+        self.assertEqual(commands[-1][commands[-1].index("-nolisten") + 1], "tcp")
+        for capture, host, expected in (
+            ("1", "x11", 0),
+            ("0", "wayland", 0),
+            ("0", "x11", 1),
+        ):
+            with self.subTest(capture=capture, host=host):
+                result, commands, _, _ = self.run_source(
+                    RUNTIME / "plasma-software-display",
+                    arguments=("--check",),
+                    environment={
+                        "PLASMA_SOFTWARE_CAPTURE": capture,
+                        "DISPLAY_MODE": "nested",
+                        "HOST_DISPLAY_BACKEND": host,
+                        "PLASMA_SOFTWARE_NESTED": "1",
+                    },
+                )
+                self.assertEqual(result.returncode, expected, result.stderr)
+                self.assertEqual(commands, [])
 
     def test_nvidia_xorg_uses_a_private_virtual_screen_without_host_vt_access(self):
         def setup(root):
@@ -378,13 +415,31 @@ class ShellRuntimeTests(unittest.TestCase):
                 )
 
     def test_vnc_native_and_software_capture_use_different_input_paths(self):
-        for backend, software in (("wayland", "0"), ("wayland", "1"), ("x11", "0")):
-            with self.subTest(backend=backend, software=software):
+        def setup(root):
+            helper = root / "remote-output"
+            helper.write_text(
+                '#!/bin/sh\n[ "$1" = --scale ] || exit 1\nprintf "1.25\\n"\n'
+            )
+            helper.chmod(0o755)
+
+        for backend, software, relay in (
+            ("wayland", "0", "0"),
+            ("wayland", "0", "1"),
+            ("wayland", "1", "0"),
+            ("wayland", "1", "1"),
+            ("x11", "0", "0"),
+        ):
+            with self.subTest(backend=backend, software=software, relay=relay):
                 result, commands, environment, _ = self.run_source(
                     RUNTIME / "plasma-vnc",
+                    setup=setup,
+                    replacements=(
+                        ("/usr/local/libexec/plasma-remote-output", "remote-output"),
+                    ),
                     environment={
                         "DISPLAY_BACKEND": backend,
                         "PLASMA_SOFTWARE_CAPTURE": software,
+                        "PLASMA_SOFTWARE_NESTED": relay,
                         "PLASMA_NVIDIA_NESTED": "1" if backend == "x11" else "0",
                     },
                     before="cat() { printf 'testpass'; }\n"
@@ -395,9 +450,16 @@ class ShellRuntimeTests(unittest.TestCase):
                     self.assertEqual(commands[-1][0], "/usr/bin/krfb-virtualmonitor")
                     self.assertEqual(environment["PLASMA_KWIN_INPUT"], "1")
                     self.assertIn("800x600", commands[-1])
+                    self.assertEqual(
+                        commands[-1][commands[-1].index("--scale") + 1], "1.25"
+                    )
                     self.assertEqual(environment["LD_PRELOAD"], "/caller/preload.so")
+                    self.assertNotIn("-no6", commands[-1])
+                    self.assertNotIn("-rfbportv6", commands[-1])
+                    self.assertNotIn("-nolookup", commands[-1])
                 else:
                     self.assertEqual(commands[-1][0], "/usr/bin/x11vnc")
+                    self.assertIn("-nolookup", commands[-1])
                     self.assertIn("17", commands[-1])
                     self.assertEqual(
                         environment["LD_PRELOAD"],
@@ -407,8 +469,16 @@ class ShellRuntimeTests(unittest.TestCase):
                         self.assertEqual(environment["DISPLAY"], ":110")
                         self.assertNotIn("WAYLAND_DISPLAY", environment)
                         self.assertIn("-nomodtweak", commands[-1])
-                    if backend == "x11":
-                        self.assertIn("-localhost", commands[-1])
+                    self.assertEqual(
+                        "-localhost" in commands[-1], backend == "x11" or relay == "1"
+                    )
+                    self.assertEqual("-no6" in commands[-1], relay == "1")
+                    if relay == "1":
+                        self.assertEqual(
+                            commands[-1][commands[-1].index("-rfbportv6") + 1], "-1"
+                        )
+                    else:
+                        self.assertNotIn("-rfbportv6", commands[-1])
 
     def test_kiosk_and_desktop_sessions_keep_their_supported_entrypoints(self):
         def setup(root):
@@ -716,12 +786,15 @@ json.dump = checked_dump
             viewer.chmod(0o755)
             for name in ("nested-server", "wait"):
                 helper = root / name
-                helper.write_text(f'#!/bin/bash\nrecord {name} "$@"\n')
+                helper.write_text(
+                    f'#!/bin/bash\nrecord {name} "$@" "$DBUS_SESSION_BUS_ADDRESS"\n'
+                )
                 helper.chmod(0o755)
 
-        for help_text, status, option, host in (
-            ("ShortcutModifiers", 0, "-ShortcutModifiers=", "x11"),
-            ("MenuKey", 1, "-MenuKey=", "wayland"),
+        for help_text, status, option, host, capture in (
+            ("ShortcutModifiers", 0, "-ShortcutModifiers=", "x11", "0"),
+            ("MenuKey", 1, "-MenuKey=", "wayland", "0"),
+            ("MenuKey", 1, "-MenuKey=", "wayland", "1"),
         ):
             result, commands, environment, _ = self.run_source(
                 RUNTIME / "plasma-nested-x11",
@@ -735,6 +808,8 @@ json.dump = checked_dump
                     "TEST_VIEWER_HELP": help_text,
                     "TEST_HELP_STATUS": str(status),
                     "HOST_DISPLAY_BACKEND": host,
+                    "PLASMA_SOFTWARE_CAPTURE": capture,
+                    "DBUS_SESSION_BUS_ADDRESS": "unix:path=/test-guest-bus",
                 },
             )
             self.assertEqual(result.returncode, 0, result.stderr)
@@ -744,16 +819,24 @@ json.dump = checked_dump
             self.assertIn("-SendClipboard=0", commands[-1])
             if host == "x11":
                 self.assertNotIn("WAYLAND_DISPLAY", environment)
-                self.assertEqual(environment["DISPLAY"], ":41")
+                self.assertEqual(environment["DISPLAY"], "unix/:41")
             else:
+                waits = [command for command in commands if command[0] == "wait"]
+                self.assertTrue(waits)
+                for wait in waits:
+                    self.assertEqual(wait[-1], "unix:path=/test-guest-bus")
                 self.assertEqual(commands[-1][0:2], ["dbus-run-session", "--"])
                 self.assertIn("--present", commands[-1])
-                self.assertEqual(environment["DISPLAY"], ":110")
+                display = ":100" if capture == "1" else ":110"
+                self.assertEqual(environment["DISPLAY"], display)
                 self.assertTrue(environment["WAYLAND_DISPLAY"].endswith("host-wayland"))
                 self.assertIn("-FullScreen=1", commands[-1])
-                self.assertTrue(
-                    any(command[0] == "nested-server" for command in commands)
+                server = next(
+                    command for command in commands if command[0] == "nested-server"
                 )
+                self.assertEqual(server[1], display)
+                self.assertEqual(server[2:4], ["-auth", environment["XAUTHORITY"]])
+                self.assertEqual(server[-1], "unix:path=/dev/null")
 
     def test_nested_presentation_scopes_its_wm_and_stops_both_children(self):
         def setup(root):
@@ -811,6 +894,7 @@ json.dump = checked_dump
             ("nested", "wayland", "0", "0", "0", "--wayland-display"),
             ("nested", "x11", "0", "0", "0", "--x11-display"),
             ("nested", "x11", "0", "1", "0", "--virtual"),
+            ("nested", "wayland", "1", "1", "0", "--x11-display"),
             ("headless", "none", "1", "0", "0", "--x11-display"),
             ("headless", "none", "0", "0", "1", "--virtual"),
         ):
@@ -834,6 +918,11 @@ json.dump = checked_dump
                 self.assertEqual(commands[-1][0], "/synthetic/private/kwin")
                 self.assertIn(expected, commands[-1])
                 self.assertNotIn("--no-lockscreen", commands[-1])
+                if software == "1":
+                    self.assertEqual(
+                        commands[-1][commands[-1].index("--x11-display") + 1], ":110"
+                    )
+                    self.assertIn(["wait", "x11"], commands)
                 if nvidia == "1":
                     self.assertIn(
                         "egl-fence-wait.so:/original/preload.so",

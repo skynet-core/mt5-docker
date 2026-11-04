@@ -121,9 +121,9 @@ module_plasma_run() {
 	fi
 
 	install -d /etc/plasma /tmp/.X11-unix
-	if [[ $software == 0 ]] && /usr/local/libexec/plasma-gpu --requires-software "$backend" "$mode"; then
-		software=1
-		info 'Plasma: Debian KWin 6.3 NVIDIA remote capture requires software rendering'
+	local kwin_overlay=0
+	if [[ -n ${TARGET_APP:-} && -x /opt/kwin-6.8.2/bin/kwin_wayland ]]; then
+		kwin_overlay=1
 	fi
 	# An open render node is insufficient: EGL must create a hardware context.
 	if [[ $software == 0 ]]; then
@@ -133,6 +133,18 @@ module_plasma_run() {
 		fi
 	else
 		printf '{"devices": [], "forced_software": true}\n' >/etc/plasma/gpu.json
+	fi
+	if [[ $software == 0 ]]; then
+		local capture_policy=0
+		/usr/local/libexec/plasma-gpu --requires-software "$backend" "$mode" </etc/plasma/gpu.json || capture_policy=$?
+		case $capture_policy in
+			0)
+				software=1
+				info 'Plasma: Debian KWin 6.3 NVIDIA remote capture requires software rendering'
+				;;
+			1) ;;
+			*) die 'Cannot evaluate GPU capture policy' ;;
+		esac
 	fi
 	chmod 644 /etc/plasma/gpu.json
 	local render_node nvidia_bus
@@ -153,7 +165,7 @@ enabled = any(device.get("hardware") and
               device.get("vendor", "").startswith("NVIDIA") for device in devices)
 if enabled or sys.argv[1] == "wayland":
     binary = "/opt/kwin-6.8.2/bin/kwin_wayland"
-    if not os.path.isfile(binary):
+    if not os.environ.get("TARGET_APP") or not os.path.isfile(binary):
         binary = "/usr/bin/kwin_wayland"
     try:
         os.removexattr(binary, "security.capability")
@@ -179,12 +191,21 @@ PYTHON
 	local desktop_display=:100
 	[[ $host_x11 != :100 ]] || desktop_display=:101
 	local software_display=:110 software_capture=0 software_nested=0 nvidia_nested=0
+	local opengl_software=0
+	if [[ -f /etc/plasma/opengl-software-capture && ($kwin_overlay == 1 || ! -x /opt/kwin-6.8.2/bin/kwin_wayland) ]]; then
+		opengl_software=1
+	fi
 	[[ $host_x11 != :110 ]] || software_display=:111
-	if [[ $backend == wayland && $software == 1 && ($mode == headless || $mode == vnc || $mode == web) && ! -f /etc/plasma/opengl-software-capture ]]; then
+	if [[ $backend == wayland && $software == 1 && ($mode == headless || $mode == vnc || $mode == web) && $opengl_software == 0 ]]; then
 		software_capture=1
 	fi
-	# KWin 6.8's native X11 backend requires DRI3, unavailable on CPU-only hosts.
-	if [[ $backend == wayland && $software == 1 && $mode == nested && $host_backend == x11 && -f /etc/plasma/opengl-software-capture ]]; then
+	# Keep nested presentation independent of host DRI3 and Wayland protocols.
+	# This flag selects the presenter; the chosen GPU/software renderer is unchanged.
+	if [[ $backend == wayland && $mode == nested && $opengl_software == 1 ]]; then
+		software_nested=1
+	fi
+	if [[ $backend == wayland && $mode == nested && $software == 1 && $host_backend == wayland && $opengl_software == 0 ]]; then
+		software_capture=1
 		software_nested=1
 	fi
 	if [[ $backend == x11 && $mode == nested && -n $nvidia_bus ]]; then
@@ -223,6 +244,7 @@ PYTHON
 		plasma_write_env DISPLAY_MODE "$mode"
 		plasma_write_env DISPLAY_BACKEND "$backend"
 		plasma_write_env TARGET_APP "${TARGET_APP:-}"
+		plasma_write_env TARGET_APP_WINDOW_MODE "${TARGET_APP_WINDOW_MODE:-fullscreen}"
 		if [[ -n ${TARGET_APP:-} ]]; then
 			plasma_write_env XDG_CONFIG_HOME /home/plasma/.config/plasma-kiosk
 			# Qt's built-in KDE fallback theme can crash during GUI startup.
@@ -251,7 +273,7 @@ PYTHON
 		plasma_write_env PLASMA_SOFTWARE_CAPTURE "$software_capture"
 		plasma_write_env PLASMA_SOFTWARE_NESTED "$software_nested"
 		plasma_write_env PLASMA_SOFTWARE_DISPLAY "$software_display"
-		if [[ -f /etc/plasma/vnc-existing-output ]]; then
+		if [[ -f /etc/plasma/vnc-existing-output && $kwin_overlay == 0 ]]; then
 			plasma_write_env PLASMA_VNC_EXISTING_OUTPUT 1
 		fi
 		if [[ $backend == x11 ]]; then

@@ -5,13 +5,14 @@ repositories. Their packaged Qt/KF versions do not meet [KWin 6.8.2's build
 requirements](https://github.com/KDE/kwin/blob/v6.8.2/CMakeLists.txt). The
 `kwin-*` Docker stages build its required stack into `/opt/kwin-6.8.2` using
 Debian 13's older glibc. With the default `KWIN_VARIANT=source`, both final
-images copy the same runtime payload.
+images copy the same runtime payload. The `TARGET_APP` kiosk session activates
+it; applications keep their distro Qt environment.
 
 `--build-arg KWIN_VARIANT=distro` selects an empty overlay stage instead. BuildKit
 skips the entire Qt/KF/KWin source dependency graph and the image uses its distro
-compositor. Standard hosted CI uses this option to stay within its memory and
-disk budget. Debian's older NVIDIA remote compositor uses its software fallback
-in that variant; the source 6.8.2 variant keeps normal GPU selection.
+compositor. Hosted CI and local acceptance use the source variant. Debian's older
+NVIDIA remote compositor uses its software fallback in the distro variant; the
+source 6.8.2 variant keeps normal GPU selection.
 
 | Component | Version |
 | --- | --- |

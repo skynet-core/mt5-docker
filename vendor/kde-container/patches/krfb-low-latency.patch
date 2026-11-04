@@ -102,3 +102,16 @@
  }
  
  void PWFrameBuffer::startMonitor()
+--- a/krfb/rfbserver.cpp
++++ b/krfb/rfbserver.cpp
+@@ -174,7 +174,9 @@
+     if (d->screen) {
+         QList<QRect>::const_iterator it = modifiedTiles.constBegin();
+         for (; it != modifiedTiles.constEnd(); ++it) {
+-            rfbMarkRectAsModified(d->screen, it->x(), it->y(), it->right(), it->bottom());
++            // QRect edges are inclusive; LibVNCServer takes exclusive ends.
++            rfbMarkRectAsModified(d->screen, it->x(), it->y(),
++                                  it->x() + it->width(), it->y() + it->height());
+         }
+     }
+ }

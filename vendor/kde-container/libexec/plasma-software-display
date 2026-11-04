@@ -1,5 +1,12 @@
 #!/usr/bin/bash
 set -euo pipefail
+if [[ ${1:-} == --check ]]; then
+	[[ ${PLASMA_SOFTWARE_CAPTURE:-0} == 1 || ($DISPLAY_BACKEND == wayland && $DISPLAY_MODE == nested && $HOST_DISPLAY_BACKEND == wayland && ${PLASMA_SOFTWARE_NESTED:-0} == 1) ]]
+	exit $?
+fi
+if [[ ${PLASMA_SOFTWARE_CAPTURE:-0} != 1 ]]; then
+	exec /usr/local/libexec/plasma-nested-x11 --display
+fi
 # KWin's QPainter backend cannot feed its OpenGL-only screencast API. Its private
 # X11 parent lets native and VNC clients capture frames while apps use Wayland.
 exec /usr/bin/Xvfb "$PLASMA_SOFTWARE_DISPLAY" -auth /etc/plasma/Xauthority \

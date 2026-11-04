@@ -11,6 +11,7 @@
 #include <QFile>
 #include <QFileDevice>
 #include <QFileInfo>
+#include <QGuiApplication>
 #include <QImage>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -32,6 +33,8 @@
 #include <cstdio>
 #include <functional>
 #include <qnamespace.h>
+#include <qtenvironmentvariables.h>
+#include <qtypes.h>
 
 int captureOutput(const QString &destination, bool includeCursor = false) {
   auto *screen = QGuiApplication::primaryScreen();
@@ -85,7 +88,8 @@ int captureOutput(const QString &destination, bool includeCursor = false) {
     const auto format =
         static_cast<QImage::Format>(attributes.value("format").toInt());
     const qint64 size = qint64(stride) * height;
-    if (width <= 0 || height <= 0 || stride <= 0 || size > 128 * 1024 * 1024) {
+    if (width <= 0 || height <= 0 || stride <= 0 ||
+        size > qint64(128) * 1024 * 1024) {
       std::fprintf(stderr, "KWin returned invalid screenshot dimensions\n");
       return 1;
     }

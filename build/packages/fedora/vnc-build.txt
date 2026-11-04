@@ -34,3 +34,13 @@ pipewire-devel
 plasma-wayland-protocols-devel
 kwayland-devel
 qt6-qtwayland-devel
+meson
+xorg-x11-xtrans-devel
+libXfont2-devel
+libxkbfile-devel
+libxcvt-devel
+libdecor-devel
+wayland-protocols-devel
+xz
+libxshmfence-devel
+libdrm-devel

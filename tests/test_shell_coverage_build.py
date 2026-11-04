@@ -103,6 +103,99 @@ class ShellBuildTests(unittest.TestCase):
                     self.assertEqual(commands[7][-2:], ["--target", "vncviewer"])
                     self.assertTrue(commands[-1][-1].endswith("/LICENCE.TXT"))
 
+    def test_xwayland_source_and_both_compiled_regressions_precede_install(self):
+        def setup(root):
+            for name in ("precision.patch", "ready.patch"):
+                (root / name).write_text("patch")
+
+        for failure in (
+            "",
+            "download",
+            "checksum",
+            "patch",
+            "configure",
+            "compile",
+            "pointer",
+            "readiness",
+        ):
+            with self.subTest(failure=failure):
+                result, commands, _, _ = self.run_source(
+                    ROOT / "build/xwayland-frontend",
+                    setup=setup,
+                    environment={
+                        "XWAYLAND_FRONTEND_VERSION": "24.1.14",
+                        "XWAYLAND_FRONTEND_SHA256": "a" * 64,
+                        "TEST_FAILURE": failure,
+                    },
+                    replacements=(
+                        ("/tmp/xwayland.tar.xz", "archive.tar.xz"),
+                        ("/tmp/xwayland-pointer-precision.patch", "precision.patch"),
+                        ("/tmp/xwayland-rootful-ready.patch", "ready.patch"),
+                        ("/xwayland-source", "xserver-source"),
+                        ("/xwayland-build", "xserver-build"),
+                        ("/build-support", "support"),
+                        ("/out/root", "out"),
+                    ),
+                    before=(
+                        'curl() { record download "$@"; [[ $TEST_FAILURE != download ]] || return 1; printf archive > "${@: -1}"; }\n'
+                        'sha256sum() { read -r hash archive; record verify "$hash" "$archive" "$@"; [[ $TEST_FAILURE != checksum ]]; }\n'
+                        'tar() { record extract "$@"; }\n'
+                        'patch() { record patch "$@"; [[ $TEST_FAILURE != patch ]]; }\n'
+                        'meson() { record meson "$@"; [[ $TEST_FAILURE != configure || $1 != setup ]] && [[ $TEST_FAILURE != compile || $1 != compile ]]; }\n'
+                        'python3() { record unit "$@"; if [[ $* == *"--unit rootful-ready"* ]]; then [[ $TEST_FAILURE != readiness ]]; else [[ $TEST_FAILURE != pointer ]]; fi; }\n'
+                        'install() { record install "$@"; }\n'
+                    ),
+                )
+                self.assertEqual(result.returncode, int(bool(failure)), result.stderr)
+                actions = [command[0] for command in commands]
+                self.assertIn("/xwayland-24.1.14.tar.xz", commands[0][-3])
+                if failure == "download":
+                    self.assertEqual(actions, ["download"])
+                elif failure == "checksum":
+                    self.assertEqual(actions, ["download", "verify"])
+                elif failure:
+                    self.assertNotIn("install", actions)
+                else:
+                    self.assertEqual(
+                        actions,
+                        [
+                            "download",
+                            "verify",
+                            "extract",
+                            "patch",
+                            "patch",
+                            "meson",
+                            "meson",
+                            "unit",
+                            "unit",
+                            "install",
+                            "install",
+                        ],
+                    )
+                    self.assertEqual(commands[1][1], "a" * 64)
+                    self.assertEqual(commands[1][-2:], ["--check", "-"])
+                    for command in commands[3:5]:
+                        self.assertIn("--fuzz=0", command)
+                    for flag in (
+                        "-Dglamor=false",
+                        "-Dglx=false",
+                        "-Ddri3=false",
+                        "-Ddrm=false",
+                    ):
+                        self.assertIn(flag, commands[5])
+                    self.assertEqual(commands[6][1], "compile")
+                    self.assertNotIn("--unit", commands[7])
+                    self.assertIn("--unit", commands[8])
+                    self.assertIn("rootful-ready", commands[8])
+                    self.assertTrue(
+                        commands[-2][-1].endswith("/usr/local/libexec/plasma-xwayland")
+                    )
+                    self.assertTrue(
+                        commands[-1][-1].endswith(
+                            "/usr/share/licenses/plasma-xwayland/COPYING"
+                        )
+                    )
+
     def test_package_managers_receive_exact_filtered_lists_and_no_weak_dependencies(
         self,
     ):
@@ -421,6 +514,7 @@ class ShellBuildTests(unittest.TestCase):
             ("vnc", False, True, True, 0),
             ("vnc", False, False, False, 0),
             ("vnc", True, True, True, 1),
+            ("vnc", 2, True, True, 1),
             ("invalid", False, True, True, 2),
         ):
             with self.subTest(phase=phase, missing=missing, baseline=baseline):
@@ -428,7 +522,7 @@ class ShellBuildTests(unittest.TestCase):
                     "pkg-config() { printf /synthetic/lib; }\n"
                     'install() { record install "$@"; }\n'
                     'command() { if [[ $* == "-v vncviewer" && $TEST_PRIMARY == 1 || $* == "-v xtigervncviewer" ]]; then printf "%s/viewer\\n" "$TEST_ROOT"; else return 1; fi; }\n'
-                    'ldd() { if [[ $TEST_MISSING == 1 ]]; then printf "libmissing.so => not found\\n"; else printf "libviewer.so.1 => %s/lib/libviewer.so.1 (0x0)\\n" "$TEST_ROOT"; fi; }\n'
+                    'ldd() { if [[ $TEST_MISSING == 1 || ( $TEST_MISSING == 2 && $1 == /xwayland-build/hw/xwayland/Xwayland ) ]]; then printf "libmissing.so => not found\\n"; else printf "libviewer.so.1 => %s/lib/libviewer.so.1 (0x0)\\n" "$TEST_ROOT"; fi; }\n'
                 )
                 if not baseline:
                     before += (
@@ -451,7 +545,9 @@ class ShellBuildTests(unittest.TestCase):
                     self.assertTrue(commands[0][-1].endswith("/plasma-clipboard"))
                     self.assertTrue(commands[1][-1].endswith("/krfb/events/kwin.so"))
                 elif phase == "vnc" and not missing:
-                    self.assertEqual(len(commands), 3 if baseline else 4)
+                    self.assertEqual(
+                        len({command[-1] for command in commands}), 3 if baseline else 4
+                    )
                     self.assertTrue(commands[1][-1].endswith("/krfb/framebuffer/pw.so"))
                     if not baseline:
                         self.assertTrue(commands[-1][-1].endswith("/libviewer.so.1"))

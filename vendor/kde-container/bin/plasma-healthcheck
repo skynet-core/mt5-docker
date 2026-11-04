@@ -34,14 +34,15 @@ units = [
     "plasma-session.service",
 ]
 probes = ["desktop"]
+nested_relay = (
+    environment.get("PLASMA_SOFTWARE_NESTED") == "1"
+    or environment.get("PLASMA_NVIDIA_NESTED") == "1"
+)
 if environment["DISPLAY_MODE"] == "nested" and environment.get("CLIPBOARD_SYNC") == "1":
     units.append("plasma-clipboard.service")
-if environment.get("PLASMA_SOFTWARE_NESTED") == "1":
+if nested_relay:
     units.append("plasma-nested-x11.service")
-if (
-    environment["DISPLAY_MODE"] in ("vnc", "web")
-    or environment.get("PLASMA_SOFTWARE_NESTED") == "1"
-):
+if environment["DISPLAY_MODE"] in ("vnc", "web") or nested_relay:
     units.append("plasma-vnc.service")
     probes.append("vnc")
 if environment["DISPLAY_MODE"] == "web":
@@ -50,10 +51,7 @@ if environment["DISPLAY_MODE"] == "web":
 for unit in units:
     # is-active with multiple units succeeds when any one of them is active.
     subprocess.run(["systemctl", "is-active", "--quiet", unit], check=True)
-if (
-    environment["DISPLAY_MODE"] in ("vnc", "web")
-    or environment.get("PLASMA_SOFTWARE_NESTED") == "1"
-):
+if environment["DISPLAY_MODE"] in ("vnc", "web") or nested_relay:
     desktop_probe(["/usr/local/libexec/plasma-remote-output", "--check"])
 for probe in probes:
     desktop_probe(["/usr/local/libexec/plasma-wait", probe])

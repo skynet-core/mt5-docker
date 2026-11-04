@@ -2,10 +2,42 @@
 
 import base64
 import json
+import math
 import sys
 import time
 import urllib.request
 from pathlib import Path
+
+from PIL import ImageChops, ImageStat
+
+
+def compare_frame(reference, observed):
+    if reference.size != observed.size:
+        raise RuntimeError("Market browser and display crop dimensions disagree")
+    if reference.convert("RGBA").getchannel("A").getextrema() != (255, 255):
+        raise RuntimeError("Market browser screenshot is transparent")
+    reference, observed = reference.convert("RGB"), observed.convert("RGB")
+    ink = reference.convert("L").point(lambda value: 255 if value < 200 else 0)
+    count = ink.histogram()[255]
+    if count < 64:
+        raise RuntimeError("Market browser screenshot has no painted text/content")
+    if not any(ImageStat.Stat(reference).stddev):
+        raise RuntimeError("Market browser screenshot has no painted contrast")
+    difference = ImageChops.difference(reference, observed)
+    red, green, blue = difference.split()
+    maximum = ImageChops.lighter(red, ImageChops.lighter(green, blue))
+    matches = ImageChops.multiply(
+        ink, maximum.point(lambda value: 255 if value <= 48 else 0)
+    )
+    evidence = {
+        "mean_error": sum(ImageStat.Stat(difference).mean) / 3,
+        "painted_pixel_match": matches.histogram()[255] / count,
+    }
+    if evidence["mean_error"] > 12 or evidence["painted_pixel_match"] < 0.9:
+        raise RuntimeError(
+            "Market display does not match the painted browser; blank or chart bleed"
+        )
+    return {"passed": True, **evidence}
 
 
 def page_ready(result):
@@ -21,6 +53,30 @@ def page_ready(result):
         )
         and {"first-paint", "first-contentful-paint"} <= paints
         and result.get("frames", {}).get("count", 0) > 0
+    )
+
+
+def snapshot_ready(result):
+    if not page_ready(result):
+        return False
+    dom, state, snapshot = result["dom"], result["native"], result["snapshot"]
+    rectangle, dpr = state.get("browser"), dom.get("dpr", 0)
+    if not rectangle or not math.isfinite(dpr) or dpr <= 0:
+        return False
+    # CSS viewport units become physical pixels, rounding positive halves upward.
+    size = [math.floor(value * dpr + 0.5) for value in dom["size"]]
+    return (
+        all(value > 0 for value in size)
+        and size
+        == snapshot["cdp_size"]
+        == snapshot["native_size"]
+        == [rectangle[2] - rectangle[0], rectangle[3] - rectangle[1]]
+        and all(
+            snapshot["native_before"].get(key)
+            == state.get(key)
+            == snapshot["native_after"].get(key)
+            for key in ("desktop", "main", "browser", "market", "market_client")
+        )
     )
 
 
@@ -195,6 +251,7 @@ def debug_policy():
 
 
 def observe(timeout=60):
+    from PIL import Image
     from websockets.sync.client import connect
 
     sequence = 0
@@ -258,6 +315,7 @@ setTimeout(()=>resolve({count,visibility:document.visibilityState}),600)})"""
                         )["result"]["value"],
                     }
                     if page_ready(result):
+                        before = native()
                         screenshot = rpc(
                             page,
                             "Page.captureScreenshot",
@@ -267,18 +325,39 @@ setTimeout(()=>resolve({count,visibility:document.visibilityState}),600)})"""
                             base64.b64decode(screenshot["data"])
                         )
                         result["native"] = native(capture=True)
-                        version = read("/json/version")
-                        with connect(
-                            version["webSocketDebuggerUrl"],
-                            open_timeout=5,
-                            close_timeout=2,
-                        ) as browser:
-                            result["browser_arguments"] = rpc(
-                                browser, "Browser.getBrowserCommandLine"
-                            )
-                        return result
+                        result["dom"] = rpc(
+                            page,
+                            "Runtime.evaluate",
+                            {"expression": expression, "returnByValue": True},
+                        )["result"]["value"]
+                        with (
+                            Image.open(Path(r"C:\MT5\market-cdp.png")) as cdp,
+                            Image.open(Path(r"C:\MT5\market-native.png")) as captured,
+                        ):
+                            result["snapshot"] = {
+                                "native_before": before,
+                                "native_after": native(),
+                                "cdp_size": list(cdp.size),
+                                "native_size": list(captured.size),
+                            }
+                            if snapshot_ready(result):
+                                compare_frame(cdp, captured)
+                        if snapshot_ready(result):
+                            version = read("/json/version")
+                            with connect(
+                                version["webSocketDebuggerUrl"],
+                                open_timeout=5,
+                                close_timeout=2,
+                            ) as browser:
+                                result["browser_arguments"] = rpc(
+                                    browser, "Browser.getBrowserCommandLine"
+                                )
+                            return result
+                        result["not_ready"] = (
+                            "Market capture geometry is not consistent"
+                        )
             except (OSError, RuntimeError) as error:
-                result = {"not_ready": str(error)}
+                result["not_ready"] = str(error)
             log.write(json.dumps(result) + "\n")
             log.flush()
             time.sleep(0.5)

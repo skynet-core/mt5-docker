@@ -37,6 +37,11 @@ def application_environment():
 
 
 def command():
+    if os.environ.get("TARGET_APP_WINDOW_MODE", "fullscreen") not in (
+        "fullscreen",
+        "maximized",
+    ):
+        raise ValueError("TARGET_APP_WINDOW_MODE must be fullscreen or maximized")
     value = os.environ.get("TARGET_APP", "")
     if "\n" in value or "\r" in value:
         raise ValueError("TARGET_APP must be a single line")
@@ -53,14 +58,14 @@ def command():
     return arguments
 
 
-def configure(executable):
+def configure():
     directory = Path(os.environ["XDG_CONFIG_HOME"])
     directory.mkdir(parents=True, exist_ok=True)
-    # Forced fullscreen leaves Wine's initial nonclient input geometry stale.
+    # Some applications need maximized window geometry rather than fullscreen.
     policy = (
         "maximizehoriz=true\nmaximizehorizrule=2\n"
         "maximizevert=true\nmaximizevertrule=2\n"
-        if Path(executable).name == "mt5-launch"
+        if os.environ.get("TARGET_APP_WINDOW_MODE", "fullscreen") == "maximized"
         else "fullscreen=true\nfullscreenrule=2\n"
     )
     # Apply only to normal application windows; leave dialogs usable.
@@ -97,7 +102,7 @@ def main():
     if "--validate" in sys.argv:
         return 0
     if "--configure" in sys.argv:
-        configure(arguments[0])
+        configure()
         return 0
 
     subprocess.run(
@@ -123,16 +128,18 @@ def main():
             time.sleep(0.25)
 
     if Path(arguments[0]).name in ("chromium", "chromium-browser"):
-        arguments[1:1] = [
-            "--kiosk",
+        options = [
             "--no-first-run",
             "--no-default-browser-check",
             "--disable-session-crashed-bubble",
             "--noerrdialogs",
             f"--ozone-platform={os.environ['DISPLAY_BACKEND']}",
         ]
-        if len(arguments) == 7:
+        if os.environ.get("TARGET_APP_WINDOW_MODE", "fullscreen") == "fullscreen":
+            options.insert(0, "--kiosk")
+        if len(arguments) == 1:
             arguments.append("about:blank")
+        arguments[1:1] = options
 
     stopping = False
     child = None
