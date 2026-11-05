@@ -26,7 +26,8 @@ runuser -u plasma -- wine reg add 'HKCU\Software\Wine' /v Version /d win10 /f
 runuser -u plasma -- wine reg add 'HKCU\Software\Wine\Drivers' /v Graphics /d x11 /f
 
 curl --fail --location --retry 3 https://download.mql5.com/cdn/web/metaquotes.ltd/mt5/mt5setup.exe -o /tmp/mt5setup.exe
-curl --fail --location --retry 3 'https://go.microsoft.com/fwlink/?LinkId=2124701' -o /tmp/webview2.exe
+curl --fail --location --retry 3 --retry-all-errors --connect-timeout 30 \
+	--speed-limit 1024 --speed-time 60 'https://go.microsoft.com/fwlink/?LinkId=2124701' -o /tmp/webview2.exe
 curl --fail --location --retry 3 https://www.python.org/ftp/python/3.12.10/python-3.12.10-embed-amd64.zip -o /tmp/python.zip
 sha256sum /tmp/mt5setup.exe /tmp/webview2.exe /tmp/python.zip
 
