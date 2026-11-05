@@ -2,3 +2,4 @@
 FROM runtime-test AS pointer-parent
 RUN pacman -Syu --noconfirm --needed breeze \
     && rm -rf /var/cache/pacman/pkg/*
+COPY --from=vnc-build /out/root/ /
