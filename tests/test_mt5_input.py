@@ -83,6 +83,7 @@ class ObservationTests(unittest.TestCase):
                 pointer._obj.cbSize, ctypes.sizeof(mt5_ui_probe.GUIThreadInfo)
             )
             pointer._obj.hwndFocus = 202
+            pointer._obj.hwndCapture = 203
             pointer._obj.flags = flags[0]
             return 1
 
@@ -93,16 +94,18 @@ class ObservationTests(unittest.TestCase):
                 flags[0] = value
                 self.assertEqual(
                     mt5_ui_probe.thread_state(123, user),
-                    {"focus": 202, "menu_mode": expected},
+                    {"focus": 202, "capture": 203, "menu_mode": expected},
                 )
         with patch.object(ctypes, "windll", SimpleNamespace(user32=user), create=True):
             self.assertEqual(
-                mt5_ui_probe.thread_state(123), {"focus": 202, "menu_mode": True}
+                mt5_ui_probe.thread_state(123),
+                {"focus": 202, "capture": 203, "menu_mode": True},
             )
         query.side_effect = None
         query.return_value = 0
         self.assertEqual(
-            mt5_ui_probe.thread_state(123, user), {"focus": None, "menu_mode": None}
+            mt5_ui_probe.thread_state(123, user),
+            {"focus": None, "capture": None, "menu_mode": None},
         )
         self.assertEqual(
             query.argtypes,
@@ -712,6 +715,23 @@ class BrowserTransportTests(unittest.TestCase):
                     all(operation.call_count == 1 for operation in operations.values())
                 )
 
+    def test_rfb_releases_button_when_press_observation_fails(self):
+        client = object.__new__(mt5_input.RFBClient)
+        client.pointer = Mock()
+
+        def fail():
+            client.pointer.assert_called_with(1, 1, 1)
+            raise RuntimeError("press observation failed")
+
+        with (
+            patch.object(mt5_input.time, "sleep"),
+            self.assertRaisesRegex(RuntimeError, "press observation failed"),
+        ):
+            client.click(1, 1, on_press=fail)
+        self.assertEqual(
+            client.pointer.call_args_list, [call(1, 1), call(1, 1, 1), call(1, 1)]
+        )
+
     def test_browser_uses_real_canvas_mouse_coordinates_and_keyboard_methods(self):
         image = visible_image()
         stream = io.BytesIO()
@@ -747,6 +767,13 @@ class BrowserTransportTests(unittest.TestCase):
             page.mouse.move.assert_called_once_with(140, 230)
             page.mouse.down.assert_called_once_with()
             page.mouse.up.assert_called_once_with()
+            with self.assertRaisesRegex(RuntimeError, "press observation failed"):
+                client.click(
+                    200,
+                    400,
+                    on_press=Mock(side_effect=RuntimeError("press observation failed")),
+                )
+            self.assertEqual(page.mouse.up.call_count, 2)
             client.key(0xFF1B, True)
             client.key(0xFF1B, False)
             client.key(ord("x"), True)
@@ -1082,7 +1109,7 @@ class InputState:
     def pointer(self, x, y):
         self.position = [x, y]
 
-    def click(self, x, y):
+    def click(self, x, y, *, on_press=None):
         if (x, y) == (450, 315):
             self.startup = self.failure == "cancel"
         elif (x, y) == (17, 10):
@@ -1092,6 +1119,13 @@ class InputState:
             self.escapes = 0
         elif (x, y) == (350, 365):
             self.focused = self.failure != "focus"
+            self.capture = 202 if self.failure != "capture" else None
+            try:
+                if on_press:
+                    on_press()
+            finally:
+                if self.failure != "release":
+                    self.capture = None
 
     def key(self, key, down):
         if key == 0xFF1B and down:
@@ -1111,6 +1145,8 @@ class InputState:
             self.selected = True
 
     def text(self, value):
+        if self.capture == 202:
+            raise AssertionError("typed while the edit still owns the mouse")
         self.typed.append(value)
         if self.focused and self.failure != "keyboard":
             self.buffer = value if self.selected else self.buffer + value
@@ -1325,6 +1361,8 @@ class InputEffectTests(unittest.TestCase):
             "keyboard",
             "modifier",
             "focus",
+            "capture",
+            "release",
             "cancel",
             "click",
             "escape",
@@ -1341,6 +1379,8 @@ class InputEffectTests(unittest.TestCase):
             ):
                 state = InputState(failure)
                 mt5_input.exercise(state, state, Path(directory))
+            if failure in ("focus", "capture", "release"):
+                self.assertEqual(state.typed, [])
             if failure == "second-escape":
                 self.assertFalse(state.menus)
                 self.assertTrue(state.menu_mode)

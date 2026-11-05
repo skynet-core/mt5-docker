@@ -4,18 +4,94 @@ import os
 
 with open("/run/plasma/mt5-environment.json") as stream:
     os.environ.update(json.load(stream))
-# Upstream CLI ignores rate limits and registers MT5's thread-bound tools as workers.
-program = """
+# MT5's native SDK can hold the interpreter lock while waiting for IPC.
+program = r"""
 import asyncio
+import functools
+import inspect
+import json
+import sys
 from mt5_mcp.mcp_server import create_mcp_server
+
+worker_program = r'''
+import json
+import os
+import sys
+
+# Reserve stdout for framed responses, including when tools print output.
+response = os.fdopen(os.dup(1), 'wb')
+os.dup2(2, 1)
+sys.stdout = sys.stderr
+from mt5_mcp import mcp_tools
+from pydantic_core import to_jsonable_python
+
+while header := sys.stdin.buffer.read(4):
+    try:
+        size = int.from_bytes(header, 'big')
+        request = json.loads(sys.stdin.buffer.read(size))
+        result = getattr(mcp_tools, request['name'])(**request['arguments'])
+        message = {'result': to_jsonable_python(result)}
+    except Exception as error:
+        message = {'error': str(error)}
+    data = json.dumps(message).encode('utf-8')
+    response.write(len(data).to_bytes(4, 'big'))
+    response.write(data)
+    response.flush()
+'''
 
 async def serve():
     server = create_mcp_server(rate_limit_per_minute=0)
+    process = None
+    inflight = None
+
+    async def call_worker(name, arguments):
+        nonlocal process
+        if process is None or process.returncode is not None:
+            process = await asyncio.create_subprocess_exec(
+                sys.executable, '-u', '-c', worker_program,
+                stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
+            )
+        try:
+            data = json.dumps({'name': name, 'arguments': arguments}).encode('utf-8')
+            process.stdin.write(len(data).to_bytes(4, 'big') + data)
+            await process.stdin.drain()
+            size = int.from_bytes(await process.stdout.readexactly(4), 'big')
+            message = json.loads(await process.stdout.readexactly(size))
+        except (BrokenPipeError, ConnectionResetError, asyncio.IncompleteReadError):
+            if process.returncode is None:
+                process.kill()
+            await process.wait()
+            process = None
+            raise RuntimeError('MT5 worker process exited') from None
+        if 'error' in message:
+            raise RuntimeError(message['error'])
+        return message['result']
+
     for name in ('mt5_query', 'mt5_analyze', 'mt5_execute'):
         tool = await server.get_tool(name)
+        original = tool.fn
+
+        @functools.wraps(original)
+        async def wrapper(*args, _original=original, _name=name, **kwargs):
+            nonlocal inflight
+            if inflight is not None and not inflight.done():
+                raise RuntimeError('MT5 tools are busy; retry shortly')
+            arguments = dict(inspect.signature(_original).bind(*args, **kwargs).arguments)
+            arguments.pop('ctx', None)
+            inflight = asyncio.create_task(call_worker(_name, arguments))
+            # Consume errors even if the requesting client has cancelled.
+            inflight.add_done_callback(lambda task: task.exception() if not task.cancelled() else None)
+            return await asyncio.shield(inflight)
+
         server.local_provider.remove_tool(name)
-        server.add_tool(tool.model_copy(update={'run_in_thread': False}))
-    await server.run_async(transport='http', host='0.0.0.0', port=8000, path='/mcp')
+        server.add_tool(tool.model_copy(update={'fn': wrapper, 'run_in_thread': False}))
+    try:
+        await server.run_async(transport='http', host='0.0.0.0', port=8000, path='/mcp')
+    finally:
+        if process is not None:
+            if process.returncode is None:
+                process.kill()
+            await process.wait()
 
 asyncio.run(serve())
 """

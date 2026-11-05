@@ -22,6 +22,7 @@ class ResizedTransport:
         self.failure = failure
         self.viewport_anchor = viewport_anchor
         self.desktop = [0, 0, 1000, 750]
+        self.physical_desktop = self.desktop.copy()
         self.position = [0, 0]
         self.menus = False
         self.menu_mode = False
@@ -92,9 +93,13 @@ class ResizedTransport:
             }
         self.position = [
             self.desktop[0]
-            + (self.cursor["x"] - rectangle["x"]) * 1000 / rectangle["width"],
+            + (self.cursor["x"] - rectangle["x"])
+            * self.physical_desktop[2]
+            / rectangle["width"],
             self.desktop[1]
-            + (self.cursor["y"] - rectangle["y"]) * 750 / rectangle["height"],
+            + (self.cursor["y"] - rectangle["y"])
+            * self.physical_desktop[3]
+            / rectangle["height"],
         ]
         if buttons and self.failure != "click":
             self.menus = (
@@ -141,6 +146,31 @@ class ResizedTransport:
 
 
 class NestedMappingTests(unittest.TestCase):
+    def test_direct_window_waits_for_both_native_desktop_dimensions(self):
+        window = {"client": {"width": 1280, "height": 996}}
+        probe = Mock()
+        probe.state.side_effect = [
+            {"desktop": [0, 0, 1280, 960]},
+            {"desktop": [0, 0, 1280, 980]},
+            {"desktop": [0, 0, 1280, 996]},
+        ]
+        with patch.object(mt5_input.time, "sleep"):
+            state = mt5_input.wait_window_desktop(probe, window)
+        self.assertEqual(state["desktop"], [0, 0, 1280, 996])
+        self.assertEqual(probe.state.call_count, 3)
+
+    def test_direct_window_fails_if_native_geometry_never_catches_up(self):
+        probe = Mock()
+        probe.state.return_value = {"desktop": [0, 0, 1280, 960]}
+        with (
+            patch.object(mt5_input.time, "monotonic", side_effect=itertools.count()),
+            patch.object(mt5_input.time, "sleep"),
+            self.assertRaisesRegex(RuntimeError, "did not respond"),
+        ):
+            mt5_input.wait_window_desktop(
+                probe, {"client": {"width": 1280, "height": 996}}
+            )
+
     def client(self, output, desktop=None, window=None, geometry=None):
         probe = Mock()
         probe.state.return_value = {"desktop": desktop or [-300, 40, 1200, 800]}
@@ -338,6 +368,18 @@ class NestedMappingTests(unittest.TestCase):
                 [call(0, 0), call(300, 186), call(300, 186, 1), call(300, 186)],
             )
             self.assertEqual(sleep.call_args_list, [call(0.1), call(0.08)])
+            client.parent.pointer.reset_mock()
+
+            def fail():
+                client.parent.pointer.assert_called_with(300, 186, 1)
+                raise RuntimeError("press observation failed")
+
+            with (
+                patch.object(mt5_input.time, "sleep"),
+                self.assertRaisesRegex(RuntimeError, "press observation failed"),
+            ):
+                client.click(120, 200, on_press=fail)
+            client.parent.pointer.assert_called_with(300, 186)
             client.key(0xFF1B, True)
             client.chord(0xFFE3, ord("s"))
             client.text("Private synthetic text Α")
@@ -758,6 +800,36 @@ class NestedMappingTests(unittest.TestCase):
             )
 
 
+class ResizingDesktopTransport(ResizedTransport):
+    """The native monitor changes before Wine publishes its new geometry."""
+
+    def __init__(self, failure=None, *, viewport_anchor=None):
+        super().__init__(failure, viewport_anchor=viewport_anchor)
+        self.resize_reads = 0
+
+    def place_window(self, *geometry):
+        window = super().place_window(*geometry)
+        if not self.viewport_anchor:
+            area = window["client"]
+            self.physical_desktop = [
+                *self.desktop[:2],
+                round(area["width"] * 1.25),
+                round(area["height"] * 1.25),
+            ]
+            self.resize_reads = 2
+            if self.failure not in ("resize-delayed", "resize-never"):
+                self.desktop = self.physical_desktop.copy()
+        return window
+
+    def state(self, expected=""):
+        if self.failure == "resize-delayed":
+            if self.resize_reads:
+                self.resize_reads -= 1
+            else:
+                self.desktop = self.physical_desktop.copy()
+        return super().state(expected)
+
+
 class CursorCaptureTests(unittest.TestCase):
     def test_native_capture_failure_preserves_api_diagnostics_cause_and_cleanup(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -1113,6 +1185,27 @@ class CursorCaptureTests(unittest.TestCase):
                             ).read_bytes(),
                         )
 
+    def test_resized_direct_output_must_publish_new_desktop_before_input(self):
+        with tempfile.TemporaryDirectory() as directory:
+            transport = ResizingDesktopTransport("resize-never")
+            output = Path(directory) / "resized"
+            client = mt5_input.NestedClient(
+                transport, transport, transport, transport.window, Path(directory)
+            )
+            with (
+                patch.object(
+                    mt5_input.time, "monotonic", side_effect=itertools.count()
+                ),
+                patch.object(mt5_input.time, "sleep"),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "did not respond"):
+                    mt5_input.resized_input(
+                        client, transport, "docker", "private", {}, output
+                    )
+            self.assertEqual(transport.commands, [])
+            self.assertFalse((output / "pointer.json").exists())
+            self.assertTrue((output / "window.json").exists())
+
     def test_resized_window_requires_full_grid_cursor_menu_click_and_escape(self):
         for failure, origin, viewport_anchor in (
             (None, (0, 0), None),
@@ -1121,6 +1214,7 @@ class CursorCaptureTests(unittest.TestCase):
             (None, (-100, 40), "center"),
             (None, (0, 0), "top-left"),
             (None, (-100, 40), "top-left"),
+            ("resize-delayed", (0, 0), None),
             ("scene-second", (0, 0), None),
             ("scene-never", (0, 0), None),
             ("cursor", (0, 0), None),
@@ -1135,7 +1229,9 @@ class CursorCaptureTests(unittest.TestCase):
                 self.subTest(failure=failure, viewport_anchor=viewport_anchor),
                 tempfile.TemporaryDirectory() as directory,
             ):
-                transport = ResizedTransport(failure, viewport_anchor=viewport_anchor)
+                transport = ResizingDesktopTransport(
+                    failure, viewport_anchor=viewport_anchor
+                )
                 transport.desktop[:2] = origin
                 output = Path(directory) / "resized"
                 client = mt5_input.NestedClient(
@@ -1166,7 +1262,7 @@ class CursorCaptureTests(unittest.TestCase):
                         mt5_input, "capture_parent", side_effect=capture_after_input
                     ) as capture,
                 ):
-                    if failure not in (None, "scene-second"):
+                    if failure not in (None, "scene-second", "resize-delayed"):
                         with self.assertRaisesRegex(
                             RuntimeError,
                             "cursor at its input position|did not respond|did not stabilize",
@@ -1183,14 +1279,14 @@ class CursorCaptureTests(unittest.TestCase):
                         self.assertEqual(
                             result["cursor"]["observed_bounds_origin"],
                             {
-                                None: [516, 146],
+                                None: [505, 140],
                                 "center": [555, 165],
                                 "top-left": [505, 140],
                             }[viewport_anchor],
                         )
                         self.assertAlmostEqual(
                             result["cursor"]["expected"][0],
-                            {None: 516.25, "center": 555, "top-left": 505}[
+                            {None: 505, "center": 555, "top-left": 505}[
                                 viewport_anchor
                             ],
                         )
@@ -1235,7 +1331,7 @@ class CursorCaptureTests(unittest.TestCase):
                     else 0
                 )
                 self.assertEqual(capture.call_count, attempts * 3)
-                canonical = failure in (None, "scene-second")
+                canonical = failure in (None, "scene-second", "resize-delayed")
                 self.assertEqual((output / "cursor-hidden.png").is_file(), canonical)
                 self.assertEqual((output / "cursor-visible.png").is_file(), canonical)
                 self.assertEqual(

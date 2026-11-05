@@ -1,9 +1,11 @@
 """Run private Python entrypoints against temporary files and process boundaries."""
 
+import asyncio
 import configparser
 import contextlib
 import importlib.machinery
 import importlib.util
+import inspect
 import io
 import json
 import os
@@ -90,9 +92,7 @@ class PythonEntrypointTests(unittest.TestCase):
             self.assertEqual(result["Common"]["Login"], "123")
             self.assertEqual(result["Experts"]["Enabled"], "0")
 
-    def test_mcp_entrypoint_uses_private_environment_and_keeps_tools_on_server_thread(
-        self,
-    ):
+    def _exec_mcp_program(self, scenario):
         environment = {"DISPLAY": ":777", "WINEPREFIX": "/private/test-prefix"}
         with (
             patch.dict(os.environ, {}, clear=True),
@@ -106,38 +106,107 @@ class PythonEntrypointTests(unittest.TestCase):
         self.assertEqual(arguments[:3], ["wine", r"C:\Python\python.exe", "-c"])
         program = arguments[3]
 
+        def original(operation="terminal_info", ctx=None):
+            pass
+
         class Tool:
-            def __init__(self, name):
-                self.name = name
+            fn = staticmethod(original)
 
             def model_copy(self, *, update):
-                return SimpleNamespace(name=self.name, **update)
+                return SimpleNamespace(**update)
 
         server = SimpleNamespace(
-            get_tool=AsyncMock(side_effect=lambda name: Tool(name)),
+            get_tool=AsyncMock(side_effect=lambda _name: Tool()),
             local_provider=SimpleNamespace(remove_tool=Mock()),
             add_tool=Mock(),
-            run_async=AsyncMock(),
         )
+        async def run_async(**_kwargs):
+            await scenario(server)
+
+        server.run_async = AsyncMock(side_effect=run_async)
         factory = Mock(return_value=server)
         module = types.ModuleType("mt5_mcp.mcp_server")
         module.create_mcp_server = factory
-        with patch.dict(sys.modules, {"mt5_mcp.mcp_server": module}):
-            exec(compile(program, "<mt5-mcp-program>", "exec"), {})
+        with tempfile.TemporaryDirectory() as directory:
+            package = Path(directory) / "mt5_mcp"
+            package.mkdir()
+            (package / "__init__.py").touch()
+            (package / "mcp_tools.py").write_text(
+                "import ctypes, os, threading, time\n"
+                "def mt5_query(operation='terminal_info'):\n"
+                "    if operation == 'hold': time.sleep(0.6)\n"
+                "    if operation == 'native_hold': ctypes.PyDLL(None).sleep(1)\n"
+                "    if operation == 'crash': os._exit(17)\n"
+                "    if operation == 'fail': raise ValueError('synthetic failure')\n"
+                "    if operation == 'large': return {'text': 'ü' * 150000}\n"
+                "    print('tool output does not corrupt the protocol', flush=True)\n"
+                "    return {'operation': operation, 'pid': os.getpid(), 'thread': threading.get_ident()}\n"
+                "mt5_analyze = mt5_query\n"
+                "mt5_execute = mt5_query\n"
+            )
+            with (
+                patch.dict(sys.modules, {"mt5_mcp.mcp_server": module}),
+                patch.dict(os.environ, {"PYTHONPATH": directory}),
+            ):
+                exec(compile(program, "<mt5-mcp-program>", "exec"), {})
         factory.assert_called_once_with(rate_limit_per_minute=0)
         self.assertEqual(
             [call.args[0] for call in server.local_provider.remove_tool.call_args_list],
             ["mt5_query", "mt5_analyze", "mt5_execute"],
         )
-        self.assertTrue(
-            all(
-                not call.args[0].run_in_thread
-                for call in server.add_tool.call_args_list
-            )
-        )
+        added = [call.args[0] for call in server.add_tool.call_args_list]
+        self.assertTrue(all(not tool.run_in_thread for tool in added))
+        self.assertTrue(all(inspect.iscoroutinefunction(tool.fn) for tool in added))
+        self.assertEqual(inspect.signature(added[0].fn), inspect.signature(original))
         server.run_async.assert_awaited_once_with(
             transport="http", host="0.0.0.0", port=8000, path="/mcp"
         )
+
+    def test_mcp_worker_process_preserves_thread_affinity_and_recovers_from_errors(self):
+        async def scenario(server):
+            tools = [call.args[0].fn for call in server.add_tool.call_args_list]
+            results = [await tool(operation="ok", ctx=object()) for tool in tools]
+            self.assertEqual(len({result["pid"] for result in results}), 1)
+            self.assertNotEqual(results[0]["pid"], os.getpid())
+            self.assertEqual(len({result["thread"] for result in results}), 1)
+            self.assertEqual((await tools[0]("large"))["text"], "ü" * 150000)
+            with self.assertRaisesRegex(RuntimeError, "synthetic failure"):
+                await tools[0]("fail")
+            self.assertEqual((await tools[0]("recovered"))["operation"], "recovered")
+            with self.assertRaisesRegex(RuntimeError, "worker process exited"):
+                await tools[0]("crash")
+            self.assertNotEqual((await tools[0]("restarted"))["pid"], results[0]["pid"])
+
+        self._exec_mcp_program(scenario)
+
+    def test_mcp_cancelled_request_stays_busy_until_the_worker_finishes(self):
+        async def scenario(server):
+            tools = [call.args[0].fn for call in server.add_tool.call_args_list]
+            first = asyncio.create_task(tools[0]("hold"))
+            await asyncio.sleep(0.1)
+            first.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await first
+            for tool in tools:
+                with self.assertRaisesRegex(RuntimeError, "busy"):
+                    await tool("another")
+            await asyncio.sleep(0.8)
+            self.assertEqual((await tools[0]("recovered"))["operation"], "recovered")
+
+        self._exec_mcp_program(scenario)
+
+    def test_mcp_native_call_holding_interpreter_lock_does_not_starve_event_loop(self):
+        async def scenario(server):
+            tool = server.add_tool.call_args_list[0].args[0].fn
+            task = asyncio.create_task(tool("native_hold"))
+            beats = 0
+            while not task.done():
+                beats += 1
+                await asyncio.sleep(0.02)
+            self.assertEqual((await task)["operation"], "native_hold")
+            self.assertGreaterEqual(beats, 10)
+
+        self._exec_mcp_program(scenario)
 
 
 class DockerfileRenderingTests(unittest.TestCase):

@@ -57,6 +57,51 @@ os.execvpe('wine', ['wine', r'C:\Python\python.exe', '-c', sys.argv[1]], environ
 """
 
 
+MCP_CHECK = r"""
+import json, threading, time, urllib.request
+url = 'http://127.0.0.1:8000/mcp'
+headers = {'Content-Type': 'application/json', 'Accept': 'application/json, text/event-stream'}
+def request(message, timeout=3):
+    with urllib.request.urlopen(urllib.request.Request(url, json.dumps(message).encode(), headers), timeout=timeout) as response:
+        if session := response.headers.get('Mcp-Session-Id'): headers['Mcp-Session-Id'] = session
+        body = response.read().decode()
+    if not body: return None
+    if body.startswith(('event:', 'data:')):
+        body = next(line[5:].strip() for line in body.splitlines() if line.startswith('data:'))
+    data = json.loads(body)
+    assert 'error' not in data, data
+    return data['result']
+deadline = time.monotonic() + 60
+while True:
+    try:
+        request({'jsonrpc':'2.0','id':1,'method':'initialize','params':{'protocolVersion':'2025-03-26','capabilities':{},'clientInfo':{'name':'mt5-offline-smoke','version':'1'}}})
+        break
+    except (OSError, ValueError):
+        if time.monotonic() >= deadline: raise
+        time.sleep(0.5)
+headers['MCP-Protocol-Version'] = '2025-03-26'
+request({'jsonrpc':'2.0','method':'notifications/initialized'})
+tools = request({'jsonrpc':'2.0','id':2,'method':'tools/list'})
+assert {'mt5_query', 'mt5_analyze', 'mt5_execute'} <= {tool['name'] for tool in tools['tools']}
+result = {}
+def query():
+    try:
+        result['value'] = request({'jsonrpc':'2.0','id':3,'method':'tools/call','params':{'name':'mt5_query','arguments':{'operation':'terminal_info'}}}, timeout=30)
+    except Exception as error:
+        result['error'] = str(error)
+thread = threading.Thread(target=query, daemon=True)
+thread.start()
+time.sleep(5)
+request({'jsonrpc':'2.0','id':4,'method':'ping'})
+pending = thread.is_alive()
+if pending:
+    busy = request({'jsonrpc':'2.0','id':5,'method':'tools/call','params':{'name':'mt5_query','arguments':{'operation':'terminal_info'}}})
+    assert busy.get('isError') and 'busy' in str(busy).lower(), busy
+else:
+    assert 'error' not in result and not result['value'].get('isError'), result
+print(json.dumps({'handshake':True, 'ping':True, 'query_pending':pending, 'busy_rejected':pending}))
+"""
+
 def main(args):
     output = Path(args.output).resolve()
     output.mkdir(parents=True, exist_ok=False)
@@ -100,7 +145,7 @@ def main(args):
             "--entrypoint=/usr/local/bin/mt5-test-init",
             "--mount",
             f"type=bind,source={Path(__file__).with_name('isolated-entrypoint.sh').resolve()},target=/usr/local/bin/mt5-test-init,readonly",
-            # An offline import/window smoke must not initialize account IPC.
+            # Start MCP explicitly after the import smoke to check offline responsiveness.
             "--mount",
             "type=bind,source=/dev/null,target=/etc/systemd/system/mt5-mcp.service,readonly",
             "--privileged",
@@ -199,6 +244,13 @@ def main(args):
         )
         (output / "windows.log").write_bytes(windows.stdout + windows.stderr)
         evidence["windows"] = json.loads(windows.stdout.decode().splitlines()[-1])
+        docker(
+            "exec", "-d", "-u", "plasma", container, "sh", "-c",
+            "exec /usr/local/libexec/mt5-mcp > /tmp/mt5-mcp-ci.log 2>&1",
+        )
+        mcp = docker("exec", container, "python3", "-c", MCP_CHECK, timeout=100)
+        (output / "mcp.json").write_bytes(mcp.stdout)
+        evidence["mcp"] = json.loads(mcp.stdout.decode())
         evidence["passed"] = True
     except Exception as error:
         evidence["error"] = str(error)
@@ -206,6 +258,7 @@ def main(args):
     finally:
         for name, arguments in (
             ("container.log", ("logs", container)),
+            ("mcp.log", ("exec", container, "cat", "/tmp/mt5-mcp-ci.log")),
             ("services.log", ("exec", container, "journalctl", "-b", "--no-pager")),
             (
                 "failed-units.log",
