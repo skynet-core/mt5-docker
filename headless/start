@@ -1,0 +1,78 @@
+#!/bin/bash
+set -eu
+
+if [ ! -f /config.ini ] || [ ! -r /config.ini ]; then
+    echo 'Mount a readable MT5 configuration at /config.ini.' >&2
+    exit 1
+fi
+
+settings="$HOME/MT5/Config/assistant.ini"
+token_file="$HOME/.mcp-token"
+umask 077
+if [ ! -f "$token_file" ]; then
+    if [ -e "$settings" ]; then
+        echo 'Existing MCP settings found without their token; use a fresh data directory.' >&2
+        exit 1
+    fi
+    head -c 32 /dev/urandom | base64 | tr '+/' '_-' | tr -d '=\n' > "$token_file.tmp"
+    mv "$token_file.tmp" "$token_file"
+fi
+chmod 600 "$token_file"
+key=$(cat "$token_file")
+case "$key" in
+    ''|*[!A-Za-z0-9_-]*) echo 'Invalid MCP token file.' >&2; exit 1 ;;
+esac
+[ "${#key}" -eq 43 ] || { echo 'Invalid MCP token file.' >&2; exit 1; }
+if [ ! -f "$settings" ]; then
+    mkdir -p "$(dirname "$settings")"
+    # shortcut: MT5 treats this invalid key as no native authentication; revisit if its format changes.
+    printf '[MCP.MetaEditor]\nEnable=1\nEndpoint=http://127.0.0.1:22345/mcp\nApiKey=x\n\n[MCP.MetaTrader]\nEnable=1\nEndpoint=http://127.0.0.1:22346/mcp\nApiKey=x\n' |
+        iconv -f UTF-8 -t UTF-16 > "$settings.tmp"
+    mv "$settings.tmp" "$settings"
+fi
+cat > /tmp/mt5-nginx.conf <<EOF
+daemon off;
+error_log stderr;
+pid /tmp/mt5-nginx.pid;
+events {}
+http {
+    access_log off;
+    client_body_temp_path /tmp/mt5-nginx-client;
+    proxy_temp_path /tmp/mt5-nginx-proxy;
+    fastcgi_temp_path /tmp/mt5-nginx-fastcgi;
+    uwsgi_temp_path /tmp/mt5-nginx-uwsgi;
+    scgi_temp_path /tmp/mt5-nginx-scgi;
+    map \$http_authorization \$authorized {
+        default 0;
+        "~^Bearer ${key}\$" 1;
+    }
+    server {
+        listen 22347;
+        if (\$authorized = 0) { return 401; }
+        location / {
+            proxy_pass http://127.0.0.1:22346;
+            proxy_http_version 1.1;
+            proxy_set_header Connection "";
+            proxy_buffering off;
+            proxy_read_timeout 3600s;
+        }
+    }
+}
+EOF
+unset key
+
+nginx -c /tmp/mt5-nginx.conf &
+proxy=$!
+xvfb-run -a -s '-screen 0 1280x960x24 -nolisten tcp' \
+    wine 'Z:\home\mt5\MT5\terminal64.exe' /portable '/config:Z:\config.ini' &
+terminal=$!
+cleanup() {
+    trap - EXIT INT TERM
+    kill "$terminal" "$proxy" 2>/dev/null || true
+    wineserver -k -w 2>/dev/null || true
+    wait "$terminal" "$proxy" 2>/dev/null || true
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+wait -n "$terminal" "$proxy"
