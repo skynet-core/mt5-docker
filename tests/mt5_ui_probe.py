@@ -32,8 +32,12 @@ def thread_state(thread, user=None):
     query.restype = wintypes.BOOL
     info = GUIThreadInfo(cbSize=ctypes.sizeof(GUIThreadInfo))
     if query(thread, ctypes.byref(info)):
-        return {"focus": info.hwndFocus, "menu_mode": bool(info.flags & 0x4)}
-    return {"focus": None, "menu_mode": None}
+        return {
+            "focus": info.hwndFocus,
+            "capture": info.hwndCapture,
+            "menu_mode": bool(info.flags & 0x4),
+        }
+    return {"focus": None, "capture": None, "menu_mode": None}
 
 
 def physical_desktop(user=None):
@@ -155,7 +159,7 @@ def snapshot(expected="", gui=None, process=None, read_text=edit_text):
         **(
             thread_state(process.GetWindowThreadProcessId(main)[0])
             if read_focus
-            else {"focus": None, "menu_mode": None}
+            else {"focus": None, "capture": None, "menu_mode": None}
         ),
     )
     try:

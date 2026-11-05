@@ -21,7 +21,7 @@ from display_matrix import case_path, profiles
 from kwin_driver import KWinDriver
 from PIL import Image, ImageChops, ImageFilter
 from playwright.sync_api import sync_playwright
-from rfb import RFBClient
+from rfb import RFBClient as BaseRFBClient
 from runtime import (
     capture_metadata,
     collect,
@@ -244,6 +244,18 @@ def autologin_input(runtime, container, client, probe, output, target_scale=1):
     }
 
 
+class RFBClient(BaseRFBClient):
+    def click(self, x, y, *, on_press=None):
+        self.pointer(x, y)
+        self.pointer(x, y, 1)
+        try:
+            time.sleep(0.08)
+            if on_press:
+                on_press()
+        finally:
+            self.pointer(x, y)
+
+
 class BrowserClient:
     def __init__(self, port, output, host="127.0.0.1"):
         self.driver = sync_playwright().start()
@@ -355,12 +367,16 @@ class BrowserClient:
             box["x"] + x * box["width"] / width, box["y"] + y * box["height"] / height
         )
 
-    def click(self, x, y):
+    def click(self, x, y, *, on_press=None):
         self.pointer(x, y)
         time.sleep(0.1)
         self.page.mouse.down()
-        time.sleep(0.08)
-        self.page.mouse.up()
+        try:
+            time.sleep(0.08)
+            if on_press:
+                on_press()
+        finally:
+            self.page.mouse.up()
 
     def key(self, keysym, down):
         name = {0xFF1B: "Escape", 0xFFE3: "Control"}.get(keysym, chr(keysym))
@@ -587,15 +603,19 @@ class NestedClient:
                 return
             time.sleep(0.1)
 
-    def click(self, x, y):
+    def click(self, x, y, *, on_press=None):
         # Enter directly at the target; no interior motion may repair a stale click.
         self.parent.pointer(0, 0)
         time.sleep(0.1)
         self.pointer(x, y)
         framebuffer, _ = self.framebuffer_point(x, y)
         self.parent.pointer(*framebuffer, 1)
-        time.sleep(0.08)
-        self.parent.pointer(*framebuffer)
+        try:
+            time.sleep(0.08)
+            if on_press:
+                on_press()
+        finally:
+            self.parent.pointer(*framebuffer)
 
     def key(self, keysym, down):
         self.parent.key(keysym, down)
@@ -722,6 +742,7 @@ def capture_cursor(runtime, parent, session, output, logical, geometry):
 
 def resized_input(client, probe, runtime, parent, session, output):
     output.mkdir()
+    desktop = probe.state()["desktop"] if not client.viewport_anchor else None
     size = (
         (client.window["frame"]["width"] + 80, client.window["frame"]["height"] + 40)
         if client.viewport_anchor
@@ -729,6 +750,9 @@ def resized_input(client, probe, runtime, parent, session, output):
     )
     client.window = client.driver.place_window(280, 80, *size)
     (output / "window.json").write_text(json.dumps(client.window, indent=2) + "\n")
+    if desktop is not None:
+        # The parent configure can precede Wine's display geometry update.
+        wait_state(probe, lambda value: value["desktop"][2:] != desktop[2:])
     pointer = pointer_grid(client, probe, output)
     state = probe.state()
     point = control_point(client, probe, state["file_rect"])
@@ -753,6 +777,12 @@ def wait_state(probe, predicate, expected="", timeout=20):
         if time.monotonic() >= deadline:
             raise RuntimeError("MT5 GUI state did not respond to display input")
         time.sleep(0.2)
+
+
+def wait_window_desktop(probe, window):
+    """Wait for the direct X11 output to match the parent client geometry."""
+    size = [round(window["client"][axis]) for axis in ("width", "height")]
+    return wait_state(probe, lambda state: state["desktop"][2:] == size)
 
 
 def startup_dpi(
@@ -937,8 +967,23 @@ def exercise(client, probe, output):
     expected = "MT5Input-AaZz-0123-" + uuid.uuid4().hex
     assert not any(item.get("matches") for item in probe.state(expected)["controls"])
     phase("focusing company-search edit")
-    client.click(*control_point(client, probe, edit["rect"]))
-    wait_state(probe, lambda value: value.get("focus") == edit["hwnd"])
+
+    def edit_pressed():
+        wait_state(
+            probe,
+            lambda value: (
+                value.get("focus") == edit["hwnd"]
+                and value.get("capture") == edit["hwnd"]
+            ),
+        )
+
+    client.click(*control_point(client, probe, edit["rect"]), on_press=edit_pressed)
+    wait_state(
+        probe,
+        lambda value: (
+            value.get("focus") == edit["hwnd"] and value.get("capture") is None
+        ),
+    )
     seed = "MT5Input-seed-456"
     phase("typing initial text")
     client.text(seed)
@@ -1210,6 +1255,8 @@ def main(args):
                         output,
                         viewport_anchor=viewport_anchor,
                     )
+                    if backend == "x11" and host == "wayland" and not viewport_anchor:
+                        wait_window_desktop(probe, window)
                     report["viewport"] = client.viewport()
                 report["input"] = (
                     autologin_input(
