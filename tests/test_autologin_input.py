@@ -38,6 +38,20 @@ class ChartInputTests(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, "absent"):
                     mt5_input.chart_target(blank, (203, 41, 97))
 
+    def test_target_centers_survive_lossy_web_frame_colors(self):
+        image = self.image()
+        encoded = io.BytesIO()
+        image.save(encoded, format="JPEG", quality=75)
+        encoded.seek(0)
+        compressed = Image.open(encoded).convert("RGB")
+        for (_, color, _), expected in zip(
+            mt5_input.CHART_TARGETS, ((458, 120), (608, 320)), strict=True
+        ):
+            with self.subTest(color=color):
+                self.assertEqual(
+                    mt5_input.center(mt5_input.chart_target(compressed, color)), expected
+                )
+
     def test_target_extent_limit_uses_declared_parent_scale_and_rounds_up(self):
         for scale, width, height in (
             (1, 120, 44),

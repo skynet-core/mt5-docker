@@ -114,7 +114,8 @@ def chart_target(image, color, scale=1):
     red, green, blue = difference.split()
     bounds = (
         ImageChops.lighter(red, ImageChops.lighter(green, blue))
-        .point(lambda value: 255 if value < 3 else 0)
+        # noVNC's lossy frames can shift target edge colors by several levels.
+        .point(lambda value: 255 if value < 12 else 0)
         .filter(ImageFilter.MinFilter(5))
         .filter(ImageFilter.MaxFilter(5))
         .getbbox()
