@@ -175,8 +175,14 @@ def snapshot(expected="", gui=None, process=None, read_text=edit_text):
             result["menus"].append(window)
             continue
         if window != main:
+            try:
+                rectangle = gui.GetWindowRect(window)
+            except Exception as error:
+                if error.args[:1] == (1400,) and not gui.IsWindow(window):
+                    continue
+                raise
             result["dialogs"].append(
-                {"hwnd": window, "class": name, "rect": gui.GetWindowRect(window)}
+                {"hwnd": window, "class": name, "rect": rectangle}
             )
         children = []
         gui.EnumChildWindows(

@@ -1,5 +1,8 @@
 # MetaTrader 5 on KWin and systemd
 
+For a smaller image with only headless MT5 and its native MCP server, see the
+[standalone headless image](headless/README.md).
+
 Four amd64 images extend the corresponding [`skynet-core/systemd`](https://github.com/skynet-core/systemd/tree/1a4a0ca746a21cfff521bb1906cfe6e66ae9f578) bases:
 
 | Dockerfile | Base image | Default local Wayland compositor |

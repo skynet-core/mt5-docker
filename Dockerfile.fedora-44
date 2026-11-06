@@ -141,6 +141,9 @@ RUN chmod +x /init.d/modules/*.sh /usr/local/bin/* /usr/local/libexec/* \
     && sed -i '/^X-KDE-Wayland-Interfaces=/s/$/,org_kde_kwin_fake_input/' \
         /usr/share/applications/org.kde.krfb.virtualmonitor.desktop
 
+# Package upgrades can replace the patched KRFB executable and plugin.
+COPY --from=vnc-build /out/root/ /
+
 FROM input-build AS fixture-build
 RUN cmake --build /build --parallel 2 --target plasma-ui-fixture
 FROM runtime AS runtime-test
@@ -151,6 +154,7 @@ COPY build/packages/fedora/wine.txt /build-support/packages/wine.txt
 # DISTRO_WINE_PREPARE
 RUN /build-support/install-packages wine \
     && command -v wine && command -v wineserver && command -v Xvfb && command -v python3
+COPY --from=vnc-build /out/root/ /
 FROM wine-packages AS mt5
 COPY build/install-mt5 build/mt5-mcp-requirements.txt config/mt5/servers.dat /build-support/
 RUN --mount=type=bind,from=uv,source=/uv,target=/usr/local/bin/uv \

@@ -24,6 +24,30 @@ defaults:
     shell: bash
 
 jobs:
+  headless:
+    name: Standalone headless image
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7 # v7
+        with:
+          persist-credentials: false
+
+      - name: Build standalone headless image
+        run: docker build --network=host -f headless/Dockerfile -t mt5:headless .
+
+      - name: Test configuration and MCP
+        run: python3 tests/headless_smoke.py --image mt5:headless
+
+      - name: Retain headless evidence
+        if: always()
+        uses: actions/upload-artifact@v7 # v7
+        with:
+          name: headless-smoke
+          path: artifacts/headless-smoke/
+          if-no-files-found: warn
+          retention-days: 14
+
   checks:
     name: Source checks
     runs-on: ubuntu-latest

@@ -53,7 +53,7 @@ id() { printf '1000\n'; }
 Xvfb() { exec /usr/bin/sleep 120; }
 xdpyinfo() { if [[ $TEST_DELAYED_DISPLAY == 1 && ! -e $TEST_READY ]]; then touch "$TEST_READY"; return 1; fi; return 0; }
 sleep() { record sleep "$@"; }
-curl() { return 0; }
+curl() { record curl "$@"; }
 sha256sum() { return 0; }
 unzip() { return 0; }
 uv() { return 0; }
@@ -133,6 +133,23 @@ find() {
         self.assertTrue(
             any(command[1] == r"C:\Python\python.exe" for command in commands)
         )
+
+    def test_webview_download_retries_stalled_and_interrupted_transfers(self):
+        result, commands = self.run_installer(0)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        download = next(
+            command
+            for command in commands
+            if "https://go.microsoft.com/fwlink/?LinkId=2124701" in command
+        )
+        self.assertIn("--retry-all-errors", download)
+        for option, value in (
+            ("--retry", "3"),
+            ("--connect-timeout", "30"),
+            ("--speed-limit", "1024"),
+            ("--speed-time", "60"),
+        ):
+            self.assertEqual(download[download.index(option) + 1], value)
 
     def test_second_missing_runtime_is_fatal_before_mt5_installation(self):
         result, commands = self.run_installer(2)
