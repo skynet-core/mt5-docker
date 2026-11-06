@@ -350,6 +350,36 @@ class ObservationTests(unittest.TestCase):
         )
         self.assertEqual({item["hwnd"] for item in state["controls"]}, {111, 201})
 
+    def test_snapshot_ignores_only_confirmed_destroyed_dialogs(self):
+        for code, alive, skipped in (
+            (1400, False, True),
+            (1400, True, False),
+            (5, False, False),
+        ):
+            with self.subTest(code=code, alive=alive):
+                gui, process = self.gui()
+                gui.IsWindow.return_value = alive
+
+                def rectangle(window, code=code):
+                    if window == 200:
+                        raise Exception(code, "GetWindowRect", "failure")
+                    return (window, 10, window + 20, 30)
+
+                gui.GetWindowRect.side_effect = rectangle
+                if skipped:
+                    state = mt5_ui_probe.snapshot(
+                        gui=gui, process=process, read_text=lambda _: ""
+                    )
+                    self.assertEqual(state["dialogs"], [])
+                    self.assertEqual(state["menus"], [300])
+                    self.assertEqual({item["hwnd"] for item in state["controls"]}, {111})
+                else:
+                    with self.assertRaises(Exception) as error:
+                        mt5_ui_probe.snapshot(
+                            gui=gui, process=process, read_text=lambda _: ""
+                        )
+                    self.assertEqual(error.exception.args[0], code)
+
     def test_server_processes_json_requests_and_exits_cleanly_at_eof(self):
         source = io.StringIO('{}\n{"expected":"private-token"}\n')
         destination = io.StringIO()
