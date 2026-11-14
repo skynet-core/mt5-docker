@@ -47,7 +47,7 @@ cycler==0.12.1
     # via matplotlib
 cyclopts==5.3.2
     # via fastmcp-slim
-dnspython==2.9.0
+dnspython==2.9.2
     # via email-validator
 docstring-parser==0.18.0
     # via cyclopts
