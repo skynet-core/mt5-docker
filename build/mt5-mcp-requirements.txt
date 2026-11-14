@@ -129,7 +129,7 @@ numpy==2.5.4
     #   ta
 openapi-pydantic==0.6.0
     # via fastmcp-slim
-opentelemetry-api==1.45.1
+opentelemetry-api==1.45.2
     # via fastmcp-slim
 packaging==26.3
     # via
