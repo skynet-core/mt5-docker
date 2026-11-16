@@ -3,6 +3,7 @@
 import argparse
 import hashlib
 import json
+import os
 import subprocess
 import tempfile
 import time
@@ -86,23 +87,77 @@ def token_for(name):
         time.sleep(0.2)
 
 
+def broker_config():
+    values = {key: os.environ.get(key, "") for key in ("MT5_ACCOUNT", "MT5_PASSWORD", "MT5_SERVER")}
+    for key, value in values.items():
+        if not value or any(char in value for char in "\r\n\0"):
+            raise ValueError(f"{key} must be a nonempty single-line value")
+    if not values["MT5_ACCOUNT"].isascii() or not values["MT5_ACCOUNT"].isdigit():
+        raise ValueError("MT5_ACCOUNT must be numeric")
+    return (
+        "[Common]\n"
+        f"Login={values['MT5_ACCOUNT']}\nPassword={values['MT5_PASSWORD']}\nServer={values['MT5_SERVER']}\n"
+        "KeepPrivate=1\nNewsEnable=0\n[Experts]\nEnabled=0\nAllowLiveTrading=0\nAllowDllImport=0\n",
+        values["MT5_ACCOUNT"],
+        values["MT5_SERVER"],
+    )
+
+
+def account_status(response, login, server):
+    result = response.get("result", {})
+    if result.get("isError") or "error" in response:
+        raise RuntimeError("Native account query failed")
+    data = result.get("structuredContent")
+    if data is None:
+        data = json.loads(next(item["text"] for item in result["content"] if item["type"] == "text"))
+    account = data.get("account", {})
+    connection = data.get("terminal", {}).get("connection", {})
+    return {
+        "account_matches": str(account.get("login")) == login,
+        "server_matches": connection.get("server") == server,
+        "connected": connection.get("state") == "connected",
+        "authorized_this_session": bool(connection.get("last_authorized_at")),
+    }
+
+
+def autologin(port, token, session, login, server, timeout):
+    deadline = time.monotonic() + timeout
+    while True:
+        response, _ = request(
+            port, token, "tools/call", session,
+            {"name": "get_trading_account_info", "arguments": {}},
+        )
+        status = account_status(response, login, server)
+        if all(status.values()):
+            return status
+        if time.monotonic() >= deadline:
+            raise RuntimeError(f"Automatic broker login failed: {status}")
+        time.sleep(2)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--image", default="mt5:headless")
     parser.add_argument("--output", default="artifacts/headless-smoke")
+    parser.add_argument("--broker", action="store_true", help="Require real autologin using MT5_ACCOUNT, MT5_PASSWORD and MT5_SERVER")
+    parser.add_argument("--timeout", type=int, default=300)
     args = parser.parse_args()
+    credentials = broker_config() if args.broker else None
     output = Path(args.output).resolve()
     output.mkdir(parents=True, exist_ok=False)
     nonce = uuid4().hex[:12]
     network = f"mt5-headless-test-{nonce}"
     volume = f"mt5-headless-test-{nonce}-data"
     names = [f"mt5-headless-test-{nonce}-{index}" for index in (1, 2)]
-    evidence = {"image": args.image, "passed": False, "cases": {}}
+    evidence = {"image": args.image, "passed": False, "broker_required": args.broker, "cases": {}}
     created = []
     try:
         evidence["image_id"] = docker(
             "image", "inspect", args.image, "--format", "{{.Id}}"
         ).stdout.strip()
+        evidence["image_size_bytes"] = int(docker(
+            "image", "inspect", args.image, "--format", "{{.Size}}"
+        ).stdout)
         missing = docker("run", "--rm", "--network", "none", args.image, check=False)
         assert missing.returncode != 0 and "Mount a readable" in missing.stderr
         evidence["cases"]["missing_config_rejected"] = True
@@ -115,6 +170,12 @@ def main():
             )
             config.chmod(0o644)
             evidence["config_sha256"] = hashlib.sha256(config.read_bytes()).hexdigest()
+            account_config = config
+            if credentials:
+                account_config = Path(directory) / "account.ini"
+                account_config.write_text(credentials[0], encoding="utf-16")
+                # The enclosing temporary directory is 0700; only the bind mount exposes this file.
+                account_config.chmod(0o644)
 
             def start(name, persistent=False):
                 extra = (
@@ -132,7 +193,7 @@ def main():
                     "--publish",
                     "127.0.0.1::22347",
                     "--mount",
-                    f"type=bind,source={config},target=/config.ini,readonly",
+                    f"type=bind,source={account_config if persistent else config},target=/config.ini,readonly",
                     *extra,
                     args.image,
                 )
@@ -191,6 +252,10 @@ def main():
                     "unauthenticated_status": 401,
                     "custom_config_loaded": True,
                 }
+                if credentials and name == names[0]:
+                    evidence["cases"]["fresh_autologin"] = autologin(
+                        port, token, session, *credentials[1:], args.timeout,
+                    )
             try:
                 request(ports[1], tokens[0])
             except urllib.error.HTTPError as error:
@@ -200,24 +265,34 @@ def main():
             evidence["cases"]["unique_token_isolation"] = True
             docker("restart", "--time", "20", names[0])
             assert token_for(names[0]) == tokens[0]
-            ready(port_for(names[0]), tokens[0])
+            port = port_for(names[0])
+            _, session = ready(port, tokens[0])
             evidence["cases"]["restart_preserves_mcp"] = True
+            if credentials:
+                evidence["cases"]["restart_autologin"] = autologin(
+                    port, tokens[0], session, *credentials[1:], args.timeout,
+                )
             docker("rm", "-f", names[0])
             start(names[0], persistent=True)
             assert token_for(names[0]) == tokens[0]
-            ready(port_for(names[0]), tokens[0])
+            port = port_for(names[0])
+            _, session = ready(port, tokens[0])
             evidence["cases"]["replacement_preserves_mcp"] = True
+            if credentials:
+                evidence["cases"]["replacement_autologin"] = autologin(
+                    port, tokens[0], session, *credentials[1:], args.timeout,
+                )
         evidence["passed"] = True
     finally:
         for name in names:
             logs = docker("logs", name, check=False)
-            if name in created:
+            if name in created and not args.broker:
                 (output / f"{name}.log").write_text(logs.stdout + logs.stderr)
             docker("rm", "-f", name, check=False)
         docker("network", "rm", network, check=False)
         docker("volume", "rm", volume, check=False)
         (output / "results.json").write_text(json.dumps(evidence, indent=2) + "\n")
-    print(f"Headless MCP smoke: PASS; evidence: {output}")
+    print(f"Headless MCP {'and broker autologin' if args.broker else 'smoke'}: PASS; evidence: {output}")
 
 
 if __name__ == "__main__":

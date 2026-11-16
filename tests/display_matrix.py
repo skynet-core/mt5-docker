@@ -8,14 +8,11 @@ from pathlib import Path
 
 from PIL import Image
 
-DISTROS = ("fedora-44", "debian-13", "ubuntu-26.04", "archlinux")
+DISTROS = ("debian-13",)
 LOGS = ("start.log", "services.log", "container.log", "units.log")
 CAPTURE_METHODS = {"rfb", "parent-rfb", "kwin-screenshot2", "x11-root"}
 OS_RELEASE = {
-    "fedora-44": {"ID": "fedora", "VERSION_ID": "44"},
     "debian-13": {"ID": "debian", "VERSION_ID": "13"},
-    "ubuntu-26.04": {"ID": "ubuntu", "VERSION_ID": "26.04"},
-    "archlinux": {"ID": "arch"},
 }
 
 

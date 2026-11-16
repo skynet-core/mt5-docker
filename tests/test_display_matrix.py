@@ -2,7 +2,6 @@
 
 import json
 import os
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -20,7 +19,7 @@ class DisplayMatrixTests(unittest.TestCase):
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
-        self.distro = self.root / "fedora-44"
+        self.distro = self.root / "debian-13"
         self.distro.mkdir()
         (self.distro / "results.json").write_text(
             json.dumps({"passed": True, "image_id": IMAGE_ID})
@@ -32,7 +31,7 @@ class DisplayMatrixTests(unittest.TestCase):
             report = {
                 "passed": True,
                 "image_id": IMAGE_ID,
-                "os_release": {"ID": "fedora", "VERSION_ID": "44"},
+                "os_release": {"ID": "debian", "VERSION_ID": "13"},
                 "backend": backend,
                 "mode": mode,
                 "host_backend": host or "none",
@@ -72,7 +71,7 @@ class DisplayMatrixTests(unittest.TestCase):
             image.save(directory / "screenshot.png")
 
     def collect(self):
-        return index(self.root, ("fedora-44",))
+        return index(self.root, ("debian-13",))
 
     def test_complete_expected_matrix_and_nested_layout(self):
         self.assertEqual(len(list(profiles())), 10)
@@ -83,21 +82,10 @@ class DisplayMatrixTests(unittest.TestCase):
         self.assertTrue(result["passed"])
         self.assertEqual(result["expected_cases"], 10)
         self.assertEqual(result["passed_cases"], 10)
-        for distro, os_release in (
-            ("debian-13", {"ID": "debian", "VERSION_ID": "13"}),
-            ("ubuntu-26.04", {"ID": "ubuntu", "VERSION_ID": "26.04"}),
-            ("archlinux", {"ID": "arch"}),
-        ):
-            destination = self.root / distro
-            shutil.copytree(self.distro, destination)
-            for result_file in destination.rglob("results.json"):
-                report = json.loads(result_file.read_text())
-                report["os_release"] = os_release
-                result_file.write_text(json.dumps(report))
         complete = index(self.root)
         self.assertTrue(complete["passed"])
-        self.assertEqual(complete["expected_cases"], 40)
-        self.assertEqual(complete["passed_cases"], 40)
+        self.assertEqual(complete["expected_cases"], 10)
+        self.assertEqual(complete["passed_cases"], 10)
 
     def test_same_count_with_wrong_case_cannot_pass(self):
         (self.distro / "x11/web").rename(self.distro / "x11/wrong-mode")
@@ -106,24 +94,12 @@ class DisplayMatrixTests(unittest.TestCase):
         self.assertEqual(len(result["cases"]), 10)
         self.assertTrue((self.root / "INDEX.md").is_file())
 
-    def test_arch_build_version_is_preserved(self):
-        destination = self.root / "archlinux"
-        shutil.copytree(self.distro, destination)
-        os_release = {"ID": "arch", "VERSION_ID": "20261018.0.612668"}
-        for result_file in destination.rglob("results.json"):
+    def test_alias_to_the_wrong_distribution_cannot_pass(self):
+        for result_file in self.distro.rglob("results.json"):
             report = json.loads(result_file.read_text())
-            report["os_release"] = os_release
+            report["os_release"] = {"ID": "other", "VERSION_ID": "13"}
             result_file.write_text(json.dumps(report))
-        result = index(self.root, ("archlinux",))
-        self.assertTrue(result["passed"])
-        self.assertEqual(result["passed_cases"], 10)
-        self.assertTrue(
-            all(case["os_release"] == os_release for case in result["cases"])
-        )
-
-    def test_alias_to_the_wrong_distribution_cannot_count_as_another_image(self):
-        shutil.copytree(self.distro, self.root / "ubuntu-26.04")
-        result = index(self.root, ("ubuntu-26.04",))
+        result = self.collect()
         self.assertFalse(result["passed"])
         self.assertEqual(result["passed_cases"], 0)
         self.assertTrue(
@@ -232,7 +208,7 @@ class DisplayMatrixTests(unittest.TestCase):
                 str(Path(__file__).with_name("display_matrix.py")),
                 str(self.root),
                 "--distros",
-                "fedora-44",
+                "debian-13",
             ],
             capture_output=True,
             text=True,
@@ -240,8 +216,8 @@ class DisplayMatrixTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 1)
         self.assertIn("Display matrix: 9/10 passed", result.stdout)
-        self.assertIn("FAIL run: fedora-44: Distro run did not pass", result.stdout)
-        self.assertIn("FAIL fedora-44/wayland/vnc:", result.stdout)
+        self.assertIn("FAIL run: debian-13: Distro run did not pass", result.stdout)
+        self.assertIn("FAIL debian-13/wayland/vnc:", result.stdout)
         self.assertIn("RuntimeError: compositor frame unavailable", result.stdout)
         self.assertTrue((self.root / "index.json").is_file())
 
@@ -252,7 +228,7 @@ class DisplayMatrixTests(unittest.TestCase):
         result = self.collect()
         self.assertFalse(result["passed"])
         self.assertEqual(result["passed_cases"], 10)
-        self.assertEqual(result["run_errors"], ["fedora-44: Distro run did not pass"])
+        self.assertEqual(result["run_errors"], ["debian-13: Distro run did not pass"])
         self.assertIn("Distro run did not pass", (self.root / "INDEX.md").read_text())
 
     def test_invalid_run_metadata_still_invalidates_every_case(self):
@@ -297,18 +273,18 @@ class DisplayMatrixTests(unittest.TestCase):
             "OUTPUT_DIR": str(output),
         }
         result = subprocess.run(
-            [str(Path(__file__).with_name("display-matrix.sh")), "fedora-44"],
+            [str(Path(__file__).with_name("display-matrix.sh")), "debian-13"],
             env=environment,
             capture_output=True,
             text=True,
             check=False,
         )
         self.assertEqual(result.returncode, 1)
-        self.assertIn("Display runner failed for fedora-44", result.stderr)
+        self.assertIn("Display runner failed for debian-13", result.stderr)
         self.assertIn("RuntimeError: parent compositor failed to start", result.stderr)
         self.assertIn(
             "RuntimeError: parent compositor failed to start",
-            (output / "fedora-44/runner.log").read_text(),
+            (output / "debian-13/runner.log").read_text(),
         )
         self.assertTrue((output / "INDEX.md").is_file())
 

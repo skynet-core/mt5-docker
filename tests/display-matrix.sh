@@ -3,15 +3,15 @@
 set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 distros=("$@")
-if [[ ${#distros[@]} == 0 ]]; then distros=(fedora-44 debian-13 ubuntu-26.04 archlinux); fi
+if [[ ${#distros[@]} == 0 ]]; then distros=(debian-13); fi
 for distro in "${distros[@]}"; do
 	case "$distro" in
-	fedora-44 | debian-13 | ubuntu-26.04 | archlinux) ;;
+	debian-13) ;;
 	*) printf 'Unknown distribution: %s\n' "$distro" >&2; exit 2 ;;
 	esac
 done
-if (( ${#distros[@]} > 1 )) && [[ -n ${IMAGE_TAG:-} || -n ${FIXTURE_IMAGE:-} ]]; then
-	printf 'Select one distribution when overriding IMAGE_TAG or FIXTURE_IMAGE\n' >&2
+if (( ${#distros[@]} > 1 )); then
+	printf 'Select one distribution\n' >&2
 	exit 2
 fi
 output=${OUTPUT_DIR:-$PWD/artifacts/display-matrix/$(date -u +%Y%m%dT%H%M%SZ)-$$}

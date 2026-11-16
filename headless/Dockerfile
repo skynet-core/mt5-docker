@@ -32,7 +32,10 @@ RUN curl --fail --location --retry 3 \
         for exe in terminal64.exe metaeditor64.exe metatester64.exe; do \
             test -n "$(find "$WINEPREFIX/drive_c/MT5" -maxdepth 1 -type f -iname "$exe" -size +0c -print -quit)" || exit 1; \
         done' \
-    && rm -f /tmp/mt5setup.exe "$WINEPREFIX/drive_c/MT5/Config/assistant.ini"
+    && rm -f /tmp/mt5setup.exe "$WINEPREFIX/drive_c/MT5/Config/assistant.ini" \
+        "$WINEPREFIX/drive_c/MT5/uninstall.exe" \
+    && rm -rf "$WINEPREFIX/drive_c/MT5/Bases" "$WINEPREFIX/drive_c/MT5/logs"
+COPY --chown=mt5:mt5 config/mt5/servers.dat /home/mt5/.wine/drive_c/MT5/Config/servers.dat
 
 FROM wine-repository AS runtime
 RUN apt-get update && apt-get install -y --no-install-recommends \

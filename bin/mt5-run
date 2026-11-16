@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
-export IMAGE_TAG=${IMAGE_TAG:-mt5:fedora-44}
+export IMAGE_TAG=${IMAGE_TAG:-mt5:debian-13}
 export CONTAINER_NAME=${CONTAINER_NAME:-mt5}
 args=(--mount "type=volume,source=${MT5_VOLUME:-mt5-data},target=/home/plasma/.wine"
 	-p "${BIND_ADDRESS:-127.0.0.1}:${MT5_MCP_PORT:-8000}:8000"
@@ -21,4 +21,3 @@ if [[ -n ${MT5_ENV_FILE:-} || -f $root/.env ]]; then
 		"$launcher" "${args[@]}" "$@"
 fi
 exec "$launcher" "${args[@]}" "$@"
-

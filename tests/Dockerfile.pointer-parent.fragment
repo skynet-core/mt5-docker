@@ -1,5 +1,5 @@
-# Append to Dockerfile.archlinux; this stage is only a decorated test display.
+# Append to Dockerfile.debian-13; only the test parent needs window decorations.
 FROM runtime-test AS pointer-parent
-RUN pacman -Syu --noconfirm --needed breeze \
-    && rm -rf /var/cache/pacman/pkg/*
+RUN apt-get update && apt-get install -y --no-install-recommends breeze \
+    && rm -rf /var/lib/apt/lists/*
 COPY --from=vnc-build /out/root/ /

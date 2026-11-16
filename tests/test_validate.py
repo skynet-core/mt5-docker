@@ -58,7 +58,7 @@ class EvidenceTests(unittest.TestCase):
     def test_public_failure_diagnostics_exclude_credentials_and_mcp_responses(self):
         private = "account=123456 password=private-password server=private-broker"
         evidence = {
-            "case": "fedora-44-wayland-headless",
+            "case": "debian-13-wayland-headless",
             "passed": False,
             "phase": "account_info",
             "failure_type": "RuntimeError",
@@ -69,7 +69,7 @@ class EvidenceTests(unittest.TestCase):
         self.assertEqual(
             public_diagnostics(evidence),
             {
-                "case": "fedora-44-wayland-headless",
+                "case": "debian-13-wayland-headless",
                 "passed": False,
                 "phase": "account_info",
                 "failure_type": "RuntimeError",
