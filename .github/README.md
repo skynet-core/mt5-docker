@@ -5,7 +5,7 @@ images: Debian KDE (`debian-13`) and standalone native MCP (`headless`).
 
 ## Gates
 
-Every push and pull request runs locked dependencies, unit tests, Ruff,
+Every main-branch push and pull request runs locked dependencies, unit tests, Ruff,
 ShellCheck, Cppcheck, actionlint and per-source coverage. Native coverage reuses
 the Debian build stages. Every maintained Python/Bash/C++ file must reach 94%
 line coverage; tests and fixtures still run but do not count toward the gate.
@@ -30,6 +30,26 @@ The pinned KDE runtime remains covered by the original regression tests.
 Standard hosted runners use software rendering; GPU validation is a local tier.
 KWin needs `/dev/udmabuf`; CI loads the module before GUI tests. Source builds need
 at least 25 GiB of free disk and can take substantial time on a cold cache.
+
+## Reusing compiled dependencies
+
+BuildKit stores every intermediate build layer in GHCR (`mode=max`), including
+the compiled Qt/KWin stack, KRFB, TigerVNC and Xwayland. Unchanged stages are
+pulled from the registry and their artifacts copied into the image; they are
+not recompiled. Source, patch, build-command or base-image changes invalidate
+the affected stages automatically.
+
+Cache tags use `buildcache-<headless|native|debian-13>-<scope>` in the image
+repository. Main has a shared `main` scope; each PR has its own `pr-<number>`
+scope and also reads main. Other manual/tag builds use `sha-<commit>`.
+The native-test and KDE jobs also read each other's caches to share the native
+dependency builds. Fixture builds reuse the same loaded builder cache.
+
+Fork and Dependabot PRs use their read-only job token to read registry caches.
+Cache writes by ordinary same-repository PRs do not publish production image
+tags. Existing Actions caches are read only for migration; new large build
+layers no longer compete for the repository's Actions cache quota.
+Feature branches run through PR checks, avoiding duplicate push and PR builds.
 
 ## Broker secrets
 

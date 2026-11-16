@@ -2,7 +2,7 @@ name: Build, test and publish images
 
 on:
   push:
-    branches: ['**']
+    branches: [main]
     tags: ['v*']
   pull_request:
   workflow_dispatch:
@@ -26,6 +26,10 @@ concurrency:
 defaults:
   run:
     shell: bash
+
+env:
+  CACHE_SCOPE: ${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.number) || github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && 'main' || format('sha-{0}', github.sha) }}
+  CACHE_WRITE: ${{ github.actor != 'dependabot[bot]' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
 
 jobs:
   headless:
@@ -63,6 +67,13 @@ jobs:
 
       - uses: docker/setup-buildx-action@v4 # v4
 
+      - name: Log in to GHCR for build cache and publication
+        uses: docker/login-action@v4 # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Image tags and OCI labels
         id: meta
         uses: docker/metadata-action@v6 # v6
@@ -83,8 +94,11 @@ jobs:
           load: true
           tags: mt5:headless
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha,scope=mt5-headless
-          cache-to: type=gha,scope=mt5-headless,mode=max,ignore-error=true
+          cache-from: |
+            type=registry,ref=${{ steps.policy.outputs.image }}:buildcache-headless-${{ env.CACHE_SCOPE }}
+            type=registry,ref=${{ steps.policy.outputs.image }}:buildcache-headless-main
+            type=gha,scope=mt5-headless
+          cache-to: ${{ env.CACHE_WRITE == 'true' && format('type=registry,ref={0}:buildcache-headless-{1},mode=max', steps.policy.outputs.image, env.CACHE_SCOPE) || '' }}
 
       - name: Test configuration and MCP
         run: python3 tests/headless_smoke.py --image mt5:headless
@@ -95,14 +109,6 @@ jobs:
           MT5_ACCOUNT: ${{ secrets.MT5_ACCOUNT }}
           MT5_PASSWORD: ${{ secrets.MT5_PASSWORD }}
         run: python3 tests/headless_smoke.py --image mt5:headless --broker --output artifacts/headless-broker
-
-      - name: Log in to GHCR
-        if: steps.policy.outputs.publish == 'true'
-        uses: docker/login-action@v4 # v4
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Publish the tested headless image without rebuilding
         if: steps.policy.outputs.publish == 'true'
@@ -132,6 +138,9 @@ jobs:
     name: Source checks
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write
     env:
       COVERAGE_FILE: ${{ github.workspace }}/artifacts/coverage/python/.coverage
     steps:
@@ -183,6 +192,19 @@ jobs:
             [worker.oci]
               max-parallelism = 2
 
+      - name: Select cache registry
+        id: policy
+        env:
+          REPOSITORY: ${{ github.repository }}
+        run: echo "image=ghcr.io/${REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to GHCR for build cache
+        uses: docker/login-action@v4 # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Prepare native coverage build
         run: cat Dockerfile.debian-13 tests/native/Dockerfile.fragment > "$RUNNER_TEMP/Dockerfile.native-coverage"
 
@@ -195,8 +217,13 @@ jobs:
           platforms: linux/amd64
           load: true
           tags: mt5:native-coverage
-          cache-from: type=gha,scope=mt5-native-coverage-debian-13
-          cache-to: type=gha,scope=mt5-native-coverage-debian-13,mode=max,ignore-error=true
+          cache-from: |
+            type=registry,ref=${{ steps.policy.outputs.image }}:buildcache-native-${{ env.CACHE_SCOPE }}
+            type=registry,ref=${{ steps.policy.outputs.image }}:buildcache-native-main
+            type=registry,ref=${{ steps.policy.outputs.image }}:buildcache-debian-13-${{ env.CACHE_SCOPE }}
+            type=registry,ref=${{ steps.policy.outputs.image }}:buildcache-debian-13-main
+            type=gha,scope=mt5-native-coverage-debian-13
+          cache-to: ${{ env.CACHE_WRITE == 'true' && format('type=registry,ref={0}:buildcache-native-{1},mode=max', steps.policy.outputs.image, env.CACHE_SCOPE) || '' }}
 
       - name: Run isolated native tests and collect reports
         run: |
@@ -305,6 +332,13 @@ jobs:
             [worker.oci]
               max-parallelism = 2
 
+      - name: Log in to GHCR for build cache and publication
+        uses: docker/login-action@v4 # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Image tags and OCI labels
         id: meta
         uses: docker/metadata-action@v6 # v6
@@ -329,8 +363,13 @@ jobs:
           load: true
           tags: ${{ env.IMAGE }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha,scope=mt5-debian-13-source
-          cache-to: type=gha,scope=mt5-debian-13-source,mode=max,ignore-error=true
+          cache-from: |
+            type=registry,ref=${{ steps.policy.outputs.image }}:buildcache-debian-13-${{ env.CACHE_SCOPE }}
+            type=registry,ref=${{ steps.policy.outputs.image }}:buildcache-debian-13-main
+            type=registry,ref=${{ steps.policy.outputs.image }}:buildcache-native-${{ env.CACHE_SCOPE }}
+            type=registry,ref=${{ steps.policy.outputs.image }}:buildcache-native-main
+            type=gha,scope=mt5-debian-13-source
+          cache-to: ${{ env.CACHE_WRITE == 'true' && format('type=registry,ref={0}:buildcache-debian-13-{1},mode=max', steps.policy.outputs.image, env.CACHE_SCOPE) || '' }}
 
       - name: Check installed MT5, WebView2 and Windows dependencies without an account
         run: uv run --locked python tests/ci-smoke.py "$IMAGE" --output "artifacts/smoke/$DISTRO"
@@ -344,15 +383,9 @@ jobs:
           platforms: linux/amd64
           load: true
           tags: ${{ env.FIXTURE_IMAGE }}
-          cache-from: type=gha,scope=mt5-debian-13-source
-
-      - name: Reclaim SDK build cache when runner space is low
-        run: |
-          free_kib=$(df -Pk "$(docker info --format '{{.DockerRootDir}}')" | awk 'NR==2 {print $4}')
-          if ((free_kib < 20 * 1024 * 1024)); then
-            # Loaded images stay available while unused compiler snapshots are freed.
-            docker buildx prune --all --force
-          fi
+          cache-from: |
+            type=registry,ref=${{ steps.policy.outputs.image }}:buildcache-debian-13-${{ env.CACHE_SCOPE }}
+            type=registry,ref=${{ steps.policy.outputs.image }}:buildcache-debian-13-main
 
       - name: Prepare decorated pointer parent build
         run: cat Dockerfile.debian-13 tests/Dockerfile.pointer-parent.fragment > "$RUNNER_TEMP/Dockerfile.pointer-parent"
@@ -366,7 +399,17 @@ jobs:
           platforms: linux/amd64
           load: true
           tags: ${{ env.POINTER_PARENT_IMAGE }}
-          cache-from: type=gha,scope=mt5-debian-13-source
+          cache-from: |
+            type=registry,ref=${{ steps.policy.outputs.image }}:buildcache-debian-13-${{ env.CACHE_SCOPE }}
+            type=registry,ref=${{ steps.policy.outputs.image }}:buildcache-debian-13-main
+
+      - name: Reclaim SDK build cache when runner space is low
+        run: |
+          free_kib=$(df -Pk "$(docker info --format '{{.DockerRootDir}}')" | awk 'NR==2 {print $4}')
+          if ((free_kib < 20 * 1024 * 1024)); then
+            # All three images now share the completed KDE build; keep it until the parent is loaded.
+            docker buildx prune --all --force
+          fi
 
       - name: Bind validation to immutable image identities
         run: |
@@ -480,14 +523,6 @@ jobs:
         run: |
           docker image inspect --format '{{.Id}}' "$IMAGE" > artifacts/tested-image-id.txt
           echo "Tested $IMAGE: $(cat artifacts/tested-image-id.txt)" >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Log in to GHCR
-        if: steps.policy.outputs.publish == 'true'
-        uses: docker/login-action@v4 # v4
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Publish the tested image without rebuilding
         if: steps.policy.outputs.publish == 'true'

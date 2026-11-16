@@ -60,4 +60,6 @@ docker build --target kwin-artifacts -f Dockerfile.debian-13 .
 
 Each source phase has its own cached stage. The final `mt5` image copies only
 the collected runtime tree; source archives, compilers and build tools stay
-in the builder stages.
+in the builder stages. CI retains these compiled stages in GHCR so later builds
+pull their artifacts instead of rebuilding Qt and KWin. See
+[CI cache policy](../.github/README.md#reusing-compiled-dependencies).
