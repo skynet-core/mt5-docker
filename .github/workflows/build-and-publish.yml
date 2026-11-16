@@ -41,6 +41,8 @@ jobs:
     permissions:
       contents: read
       packages: write
+    env:
+      CACHE_SCOPE: ${{ needs.checks.outputs.cache_scope }}
     steps:
       - uses: actions/checkout@v7 # v7
         with:
@@ -142,6 +144,9 @@ jobs:
     permissions:
       contents: read
       packages: write
+      pull-requests: read
+    outputs:
+      cache_scope: ${{ steps.policy.outputs.cache_scope }}
     env:
       COVERAGE_FILE: ${{ github.workspace }}/artifacts/coverage/python/.coverage
     steps:
@@ -197,7 +202,21 @@ jobs:
         id: policy
         env:
           REPOSITORY: ${{ github.repository }}
-        run: echo "image=ghcr.io/${REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          echo "image=ghcr.io/${REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+          scope=$CACHE_SCOPE
+          if [[ $GITHUB_EVENT_NAME == workflow_dispatch && $GITHUB_REF_TYPE == branch && $GITHUB_REF_NAME != "$DEFAULT_BRANCH" ]]; then
+            pr=$(gh pr list --repo "$REPOSITORY" --head "$GITHUB_REF_NAME" --base "$DEFAULT_BRANCH" \
+              --json number,isCrossRepository --jq 'map(select(.isCrossRepository == false))[0].number // empty')
+            if [[ -n $pr ]]; then
+              [[ $pr =~ ^[0-9]+$ ]]
+              scope="pr-$pr"
+            fi
+          fi
+          echo "CACHE_SCOPE=$scope" >> "$GITHUB_ENV"
+          echo "cache_scope=$scope" >> "$GITHUB_OUTPUT"
 
       - name: Log in to GHCR for build cache
         uses: docker/login-action@v4 # v4
@@ -274,6 +293,7 @@ jobs:
       contents: read
       packages: write
     env:
+      CACHE_SCOPE: ${{ needs.checks.outputs.cache_scope }}
       DISTRO: debian-13
       IMAGE: mt5:debian-13
       FIXTURE_IMAGE: mt5:ci-fixture-debian-13

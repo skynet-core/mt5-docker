@@ -43,7 +43,9 @@ the affected stages automatically.
 
 Cache tags use `buildcache-<headless|native|debian-13>-<scope>` in the image
 repository. Main has a shared `main` scope; each PR has its own `pr-<number>`
-scope and also reads main. Other manual/tag builds use `sha-<commit>`.
+scope and also reads main. Manual builds of an open same-repository PR reuse that
+PR's scope, including broker acceptance runs. Other manual/tag builds use
+`sha-<commit>`.
 The native-test and KDE jobs also read each other's caches to share the native
 dependency builds. Fixture builds reuse the same loaded builder cache.
 The KDE dependency/fixture image is cached before the MT5 installer runs, so a
