@@ -132,13 +132,15 @@ class PythonEntrypointTests(unittest.TestCase):
             package.mkdir()
             (package / "__init__.py").touch()
             (package / "mcp_tools.py").write_text(
-                "import ctypes, os, threading, time\n"
+                "import ctypes, os, pathlib, threading, time\n"
                 "import numpy as np\n"
                 "from pydantic import BaseModel\n"
                 "class QueryResult(BaseModel):\n"
                 "    data: list[dict]\n"
                 "def mt5_query(operation='terminal_info'):\n"
-                "    if operation == 'hold': time.sleep(0.6)\n"
+                "    if operation == 'hold':\n"
+                "        pathlib.Path(os.environ['MT5_TEST_STARTED']).touch()\n"
+                "        while not pathlib.Path(os.environ['MT5_TEST_RELEASE']).exists(): time.sleep(0.01)\n"
                 "    if operation == 'native_hold': ctypes.PyDLL(None).sleep(1)\n"
                 "    if operation == 'crash': os._exit(17)\n"
                 "    if operation == 'fail': raise ValueError('synthetic failure')\n"
@@ -153,7 +155,11 @@ class PythonEntrypointTests(unittest.TestCase):
             )
             with (
                 patch.dict(sys.modules, {"mt5_mcp.mcp_server": module}),
-                patch.dict(os.environ, {"PYTHONPATH": directory}),
+                patch.dict(os.environ, {
+                    "PYTHONPATH": directory,
+                    "MT5_TEST_STARTED": str(Path(directory) / "started"),
+                    "MT5_TEST_RELEASE": str(Path(directory) / "release"),
+                }),
             ):
                 exec(compile(program, "<mt5-mcp-program>", "exec"), {})
         factory.assert_called_once_with(rate_limit_per_minute=0)
@@ -196,15 +202,25 @@ class PythonEntrypointTests(unittest.TestCase):
         async def scenario(server):
             tools = [call.args[0].fn for call in server.add_tool.call_args_list]
             first = asyncio.create_task(tools[0]("hold"))
-            await asyncio.sleep(0.1)
+            async with asyncio.timeout(10):
+                while not Path(os.environ["MT5_TEST_STARTED"]).exists():
+                    await asyncio.sleep(0.01)
             first.cancel()
             with self.assertRaises(asyncio.CancelledError):
                 await first
             for tool in tools:
                 with self.assertRaisesRegex(RuntimeError, "busy"):
                     await tool("another")
-            await asyncio.sleep(0.8)
-            self.assertEqual((await tools[0]("recovered"))["operation"], "recovered")
+            Path(os.environ["MT5_TEST_RELEASE"]).touch()
+            async with asyncio.timeout(10):
+                while True:
+                    try:
+                        result = await tools[0]("recovered")
+                        break
+                    except RuntimeError as error:
+                        self.assertIn("MT5 tools are busy", str(error))
+                        await asyncio.sleep(0.01)
+            self.assertEqual(result["operation"], "recovered")
 
         self._exec_mcp_program(scenario)
 
