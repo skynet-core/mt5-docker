@@ -133,12 +133,19 @@ class PythonEntrypointTests(unittest.TestCase):
             (package / "__init__.py").touch()
             (package / "mcp_tools.py").write_text(
                 "import ctypes, os, threading, time\n"
+                "import numpy as np\n"
+                "from pydantic import BaseModel\n"
+                "class QueryResult(BaseModel):\n"
+                "    data: list[dict]\n"
                 "def mt5_query(operation='terminal_info'):\n"
                 "    if operation == 'hold': time.sleep(0.6)\n"
                 "    if operation == 'native_hold': ctypes.PyDLL(None).sleep(1)\n"
                 "    if operation == 'crash': os._exit(17)\n"
                 "    if operation == 'fail': raise ValueError('synthetic failure')\n"
                 "    if operation == 'large': return {'text': 'ü' * 150000}\n"
+                "    if operation == 'unsupported': return object()\n"
+                "    if operation == 'rates': return QueryResult(data=[{'time': np.int64(1700000000), "
+                "'close': np.float32(1.25), 'tick_volume': np.uint64(2**63+1), 'valid': np.bool_(True)}])\n"
                 "    print('tool output does not corrupt the protocol', flush=True)\n"
                 "    return {'operation': operation, 'pid': os.getpid(), 'thread': threading.get_ident()}\n"
                 "mt5_analyze = mt5_query\n"
@@ -170,6 +177,12 @@ class PythonEntrypointTests(unittest.TestCase):
             self.assertNotEqual(results[0]["pid"], os.getpid())
             self.assertEqual(len({result["thread"] for result in results}), 1)
             self.assertEqual((await tools[0]("large"))["text"], "ü" * 150000)
+            self.assertEqual(await tools[0]("rates"), {"data": [{
+                "time": 1700000000, "close": 1.25,
+                "tick_volume": 2**63 + 1, "valid": True,
+            }]})
+            with self.assertRaisesRegex(RuntimeError, "Unsupported MCP result type"):
+                await tools[0]("unsupported")
             with self.assertRaisesRegex(RuntimeError, "synthetic failure"):
                 await tools[0]("fail")
             self.assertEqual((await tools[0]("recovered"))["operation"], "recovered")
