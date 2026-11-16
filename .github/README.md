@@ -76,10 +76,12 @@ gh workflow run build-and-publish.yml --ref your-branch -f publish=false -f brok
 Ordinary branch pushes and pull requests do not receive broker credentials.
 The headless acceptance test mounts a temporary custom UTF-16 startup INI,
 requires the exact configured account and server, and checks the terminal is
-connected and authorized in the current session. It repeats after restart and
-container replacement using the retained volume. It never calls a login tool
-or submits a trade. Only boolean broker results are uploaded; account responses,
-credentials and broker terminal logs are excluded.
+connected and authorized in the current session (`authorized` or the subsequent
+`synchronized` native state, with a current-session authorization timestamp).
+It repeats after restart and container replacement using the retained volume.
+It never calls a login tool or submits a trade. Only allowlisted broker status
+fields are uploaded; account responses, credentials and broker terminal logs
+are excluded.
 
 ## Published images
 

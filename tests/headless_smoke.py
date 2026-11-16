@@ -87,26 +87,6 @@ def token_for(name):
         time.sleep(0.2)
 
 
-def journal_for(name):
-    return docker(
-        "exec", name, "sh", "-c",
-        'for f in "$HOME"/MT5/logs/*.log; do '
-        'iconv -f UTF-16LE -t UTF-8 "$f" 2>/dev/null; done',
-        check=False,
-    ).stdout
-
-
-def journal_status(text):
-    text = text.lower()
-    return {
-        "authorization_seen": "authorized on " in text,
-        "authorization_failed": any("authorization" in line and "failed" in line for line in text.splitlines()),
-        "connection_lost": "connection lost" in text,
-        "synchronized": "terminal synchronized with " in text,
-        "live_update_seen": "liveupdate" in text,
-    }
-
-
 def broker_config():
     values = {key: os.environ.get(key, "") for key in ("MT5_ACCOUNT", "MT5_PASSWORD", "MT5_SERVER")}
     for key, value in values.items():
@@ -136,11 +116,11 @@ def account_status(response, login, server):
     return {
         "account_matches": str(account.get("login")) == login,
         "server_matches": connection.get("server") == server,
-        "connected": state == "authorized",
+        "connected": state in ("authorized", "synchronized"),
         "authorized_this_session": bool(connection.get("last_authorized_at")),
         "connection_state": state if state in (
-            "disconnected", "connecting", "connected", "authorized", "unknown",
-        ) else f"unexpected-{type(state).__name__}",
+            "disconnected", "connecting", "connected", "authorized", "synchronized",
+        ) else "unknown",
     }
 
 
@@ -231,7 +211,14 @@ def main():
             assert all(len(t) == 43 for t in tokens) and tokens[0] != tokens[1]
             for name, port, token in zip(names, ports, tokens, strict=True):
                 server, session = ready(port, token)
-                startup = journal_for(name)
+                startup = docker(
+                    "exec",
+                    name,
+                    "sh",
+                    "-c",
+                    'for f in "$HOME"/MT5/logs/*.log; do '
+                    'iconv -f UTF-16LE -t UTF-8 "$f" 2>/dev/null; done',
+                ).stdout
                 assert (
                     'successfully initialized from start config "Z:\\config.ini"'
                     in startup
@@ -306,8 +293,6 @@ def main():
             logs = docker("logs", name, check=False)
             if name in created and not args.broker:
                 (output / f"{name}.log").write_text(logs.stdout + logs.stderr)
-            if name in created and args.broker and not evidence["passed"]:
-                evidence.setdefault("broker_journals", {})[name] = journal_status(journal_for(name))
             docker("rm", "-f", name, check=False)
         docker("network", "rm", network, check=False)
         docker("volume", "rm", volume, check=False)
