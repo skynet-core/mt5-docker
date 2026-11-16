@@ -12,7 +12,7 @@ def response(**connection):
     return {"result": {"structuredContent": {
         "account": {"login": 123},
         "terminal": {"connection": {
-            "state": "connected", "server": "Broker-Demo",
+            "state": "authorized", "server": "Broker-Demo",
             "last_authorized_at": "2026-11-16T00:00:00Z", **connection,
         }},
     }}}
@@ -25,6 +25,7 @@ class HeadlessAcceptanceTests(unittest.TestCase):
             (response(), "124", "Broker-Demo"),
             (response(), "123", "Other-Demo"),
             (response(state="disconnected"), "123", "Broker-Demo"),
+            (response(state="connected"), "123", "Broker-Demo"),
             (response(last_authorized_at=None), "123", "Broker-Demo"),
         ):
             self.assertFalse(all(account_status(payload, login, server).values()))

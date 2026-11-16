@@ -78,3 +78,13 @@ current-session authorization and connected state using native MCP. It repeats
 after restart and container replacement. No login API call or trade is submitted.
 Broker evidence contains only account-free assertions. CI requires this check
 before publishing `ghcr.io/skynet-core/mt5-docker:headless`; see [CI setup](../.github/README.md).
+
+## Recorded local acceptance
+
+On 2026-11-16, image
+`sha256:a078e1b889f78ed2530758a8afe0aba5fcfb25320523ac9ea68caa851f5ea280`
+passed authenticated host-port MCP access (107 tools), token rejection and
+isolation, custom config loading, and real demo-account autologin on fresh start,
+restart and volume-backed replacement. Evidence is in
+`artifacts/headless-acceptance/results.json`; it contains no account identifiers
+or credentials. Docker reported 2,392,716,316 bytes (2.23 GiB) for the local image.

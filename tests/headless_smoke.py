@@ -115,7 +115,7 @@ def account_status(response, login, server):
     return {
         "account_matches": str(account.get("login")) == login,
         "server_matches": connection.get("server") == server,
-        "connected": connection.get("state") == "connected",
+        "connected": connection.get("state") == "authorized",
         "authorized_this_session": bool(connection.get("last_authorized_at")),
     }
 
