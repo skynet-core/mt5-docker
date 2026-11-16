@@ -112,11 +112,15 @@ def account_status(response, login, server):
         data = json.loads(next(item["text"] for item in result["content"] if item["type"] == "text"))
     account = data.get("account", {})
     connection = data.get("terminal", {}).get("connection", {})
+    state = connection.get("state")
     return {
         "account_matches": str(account.get("login")) == login,
         "server_matches": connection.get("server") == server,
-        "connected": connection.get("state") == "authorized",
+        "connected": state == "authorized",
         "authorized_this_session": bool(connection.get("last_authorized_at")),
+        "connection_state": state if state in (
+            "disconnected", "connecting", "connected", "authorized",
+        ) else "unknown",
     }
 
 
@@ -128,7 +132,8 @@ def autologin(port, token, session, login, server, timeout):
             {"name": "get_trading_account_info", "arguments": {}},
         )
         status = account_status(response, login, server)
-        if all(status.values()):
+        if (status["account_matches"] and status["server_matches"]
+                and status["connected"] and status["authorized_this_session"]):
             return status
         if time.monotonic() >= deadline:
             raise RuntimeError(f"Automatic broker login failed: {status}")

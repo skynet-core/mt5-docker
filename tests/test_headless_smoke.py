@@ -36,8 +36,13 @@ class HeadlessAcceptanceTests(unittest.TestCase):
 
     def test_login_timeout_cannot_pass_on_a_cached_disconnected_account(self):
         with patch("headless_smoke.request", return_value=(response(state="disconnected"), None)):
-            with self.assertRaisesRegex(RuntimeError, "Automatic broker login failed"):
+            with self.assertRaisesRegex(RuntimeError, "'connection_state': 'disconnected'"):
                 autologin(1234, "token", "session", "123", "Broker-Demo", 0)
+
+    def test_connection_diagnostics_do_not_expose_unexpected_broker_data(self):
+        status = account_status(response(state="private broker response"), "123", "Broker-Demo")
+        self.assertEqual(status["connection_state"], "unknown")
+        self.assertNotIn("private broker response", json.dumps(status))
 
     def test_private_configuration_preserves_password_and_rejects_ini_injection(self):
         values = {"MT5_ACCOUNT": "123", "MT5_PASSWORD": "private $ % # pass", "MT5_SERVER": "Broker-Demo"}
