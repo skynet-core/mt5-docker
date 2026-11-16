@@ -134,7 +134,6 @@ COPY vendor/kde-container/init.d/modules/ /init.d/modules/
 COPY vendor/kde-container/bin/plasma-healthcheck /usr/local/bin/plasma-healthcheck
 COPY vendor/kde-container/libexec/ /usr/local/libexec/
 COPY vendor/kde-container/systemd/system/ /etc/systemd/system/
-COPY vendor/kde-container/config/ /etc/xdg/
 # KWin's scoped protocol permissions need the service menu, without Plasma shell.
 COPY config/menus/ /etc/xdg/menus/
 COPY --from=input-build /out/root/ /

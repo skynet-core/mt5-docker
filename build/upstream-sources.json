@@ -154,24 +154,6 @@
       "mode": "100644"
     },
     {
-      "path": "vendor/kde-container/config/kscreenlockerrc",
-      "upstream_path": "config/kscreenlockerrc",
-      "sha256": "efc39c3791bcfa5ba7a1aeaa6843bc3320c81dc1b80d71bfc0b36e2a3f0dee4d",
-      "mode": "100644"
-    },
-    {
-      "path": "vendor/kde-container/config/ksplashrc",
-      "upstream_path": "config/ksplashrc",
-      "sha256": "fe02d91f60d05640b9b44dd185eb5a89fc7394a5c3aa456f639cbf89b4c3747b",
-      "mode": "100644"
-    },
-    {
-      "path": "vendor/kde-container/config/startkderc",
-      "upstream_path": "config/startkderc",
-      "sha256": "a6a10ce97fb2fdcb2ac995efa72bef77e7bb836ce6d6c0fbd5e1cfa7cb4efb51",
-      "mode": "100644"
-    },
-    {
       "path": "vendor/kde-container/init.d/modules/300-plasma-user.sh",
       "upstream_path": "init.d/modules/300-plasma-user.sh",
       "sha256": "822d475b0671ce11d11e7436d6cafc03570f1190bcbff5537754db328a646e24",
