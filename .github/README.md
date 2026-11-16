@@ -25,7 +25,9 @@ The KDE job retains these checks:
 - Ten Market/WebView2 painting profiles.
 - Eight real broker/MCP/expert-backtest profiles before publication.
 
-The decorated pointer parent and native test image are test-only Debian targets.
+The native test image is Debian-only. Advanced pointer tests use a digest-pinned
+upstream KDE image as their decorated host; their MT5 guest is the tested Debian
+production image.
 The pinned KDE runtime remains covered by the original regression tests.
 Standard hosted runners use software rendering; GPU validation is a local tier.
 KWin needs `/dev/udmabuf`; CI loads the module before GUI tests. Source builds need
@@ -44,6 +46,8 @@ repository. Main has a shared `main` scope; each PR has its own `pr-<number>`
 scope and also reads main. Other manual/tag builds use `sha-<commit>`.
 The native-test and KDE jobs also read each other's caches to share the native
 dependency builds. Fixture builds reuse the same loaded builder cache.
+The KDE dependency/fixture image is cached before the MT5 installer runs, so a
+later installation failure does not discard completed Qt/KWin builds.
 
 Fork and Dependabot PRs use their read-only job token to read registry caches.
 Cache writes by ordinary same-repository PRs do not publish production image

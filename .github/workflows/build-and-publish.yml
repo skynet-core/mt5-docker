@@ -352,6 +352,24 @@ jobs:
             type=ref,event=tag,suffix=-debian-13
             type=ref,event=pr,suffix=-debian-13
 
+      - name: Cache compiled KDE dependencies and load the GUI fixture
+        uses: docker/build-push-action@v7 # v7
+        with:
+          context: .
+          file: Dockerfile.debian-13
+          target: runtime-test
+          platforms: linux/amd64
+          pull: true
+          load: true
+          tags: ${{ env.FIXTURE_IMAGE }}
+          cache-from: |
+            type=registry,ref=${{ steps.policy.outputs.image }}:buildcache-debian-13-${{ env.CACHE_SCOPE }}
+            type=registry,ref=${{ steps.policy.outputs.image }}:buildcache-debian-13-main
+            type=registry,ref=${{ steps.policy.outputs.image }}:buildcache-native-${{ env.CACHE_SCOPE }}
+            type=registry,ref=${{ steps.policy.outputs.image }}:buildcache-native-main
+            type=gha,scope=mt5-debian-13-source
+          cache-to: ${{ env.CACHE_WRITE == 'true' && format('type=registry,ref={0}:buildcache-debian-13-{1},mode=max', steps.policy.outputs.image, env.CACHE_SCOPE) || '' }}
+
       - name: Build and load production image
         uses: docker/build-push-action@v7 # v7
         with:
@@ -374,23 +392,10 @@ jobs:
       - name: Check installed MT5, WebView2 and Windows dependencies without an account
         run: uv run --locked python tests/ci-smoke.py "$IMAGE" --output "artifacts/smoke/$DISTRO"
 
-      - name: Build matching GUI fixture
-        uses: docker/build-push-action@v7 # v7
-        with:
-          context: .
-          file: Dockerfile.debian-13
-          target: runtime-test
-          platforms: linux/amd64
-          load: true
-          tags: ${{ env.FIXTURE_IMAGE }}
-          cache-from: |
-            type=registry,ref=${{ steps.policy.outputs.image }}:buildcache-debian-13-${{ env.CACHE_SCOPE }}
-            type=registry,ref=${{ steps.policy.outputs.image }}:buildcache-debian-13-main
-
       - name: Prepare decorated pointer parent build
         run: cat Dockerfile.debian-13 tests/Dockerfile.pointer-parent.fragment > "$RUNNER_TEMP/Dockerfile.pointer-parent"
 
-      - name: Build and load the decorated Debian pointer parent
+      - name: Load the pinned upstream KDE host with the pointer-test fixture
         uses: docker/build-push-action@v7 # v7
         with:
           context: .

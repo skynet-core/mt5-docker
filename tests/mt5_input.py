@@ -545,7 +545,8 @@ class NestedClient:
                 else self.driver.output["scale"]
             )
             width, height = width / scale, height / scale
-            if width > client["width"] or height > client["height"]:
+            # KWin's fractional geometry can represent 1024 as 1023.9999999999999.
+            if width - client["width"] > 1e-6 or height - client["height"] > 1e-6:
                 raise RuntimeError("Private relay viewport is clipped")
             # TigerVNC centres its framebuffer; Xephyr's active monitor starts at 0,0.
             if self.viewport_anchor in ("center", "center-logical"):

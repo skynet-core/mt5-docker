@@ -4,6 +4,7 @@ import contextlib
 import io
 import itertools
 import json
+import math
 import subprocess
 import tempfile
 import unittest
@@ -273,6 +274,8 @@ class NestedMappingTests(unittest.TestCase):
                     ("height", 600 / viewport_scale),
                 ):
                     original = client.window["client"][dimension]
+                    client.window["client"][dimension] = math.nextafter(limit, -math.inf)
+                    self.assertEqual(client.viewport()[dimension], limit)
                     client.window["client"][dimension] = limit - 1
                     with self.assertRaisesRegex(RuntimeError, "viewport is clipped"):
                         client.viewport()

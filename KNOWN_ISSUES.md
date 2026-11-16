@@ -19,6 +19,11 @@ Debian run despite correct focus, pointer calibration and startup DPI. The cause
 downstream of input delivery remains unresolved. The original input assertions
 remain release gates.
 
+The consolidated production image passed all twelve decorated nested-pointer
+profiles locally on 2026-11-16, at 100%, 125% and 200% scaling, using the
+digest-pinned upstream KDE test host. This run did not reproduce the earlier
+character loss; evidence is in `artifacts/kde-acceptance/pointer-upstream/`.
+
 ### Market validation scope
 
 Market tests check the bundled WebView2 shell, DOM, painting and transport pixels.
