@@ -287,7 +287,8 @@ jobs:
   images:
     name: Debian KDE image
     needs: checks
-    runs-on: ubuntu-latest
+    # shortcut: 26.04 blocks Wine socketcall; restore latest after runner Docker >= 29.4.3 (runner-images#14790).
+    runs-on: ubuntu-24.04
     timeout-minutes: 240
     permissions:
       contents: read
