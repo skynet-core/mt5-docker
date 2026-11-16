@@ -54,6 +54,8 @@ Cache writes by ordinary same-repository PRs do not publish production image
 tags. Existing Actions caches are read only for migration; new large build
 layers no longer compete for the repository's Actions cache quota.
 Feature branches run through PR checks, avoiding duplicate push and PR builds.
+New runs queue behind the running workflow, keeping only the newest pending run,
+so source compilation can finish exporting its cache before the next revision.
 
 ## Broker secrets
 

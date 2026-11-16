@@ -21,7 +21,8 @@ permissions:
 
 concurrency:
   group: mt5-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # Finish exporting compiled dependencies before starting the newest revision.
+  cancel-in-progress: false
 
 defaults:
   run:
