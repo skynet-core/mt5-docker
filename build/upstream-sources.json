@@ -4,12 +4,6 @@
   "pull_request": "https://github.com/skynet-core/kde-container/pull/5",
   "files": [
     {
-      "path": "build/arch-kwin-x11",
-      "upstream_path": "build/arch-kwin-x11",
-      "sha256": "8d7995cdd4cfaa0669f2f79199c0e89725f6118f7d68776b38f07926ae3dae0c",
-      "mode": "100755"
-    },
-    {
       "path": "build/collect-artifacts",
       "upstream_path": "build/collect-artifacts",
       "sha256": "7ffbd6fa21036d9cda70a9b0db92432533880db74a4812f1c0e94bb8b334546a",
@@ -94,30 +88,6 @@
       "mode": "100644"
     },
     {
-      "path": "build/packages/arch/input-build.txt",
-      "upstream_path": "build/packages/arch/input-build.txt",
-      "sha256": "05d98c22797eef365fe9f7cbb3ebe43c58665dbe504c63554b712879f467260f",
-      "mode": "100644"
-    },
-    {
-      "path": "build/packages/arch/vnc-build.txt",
-      "upstream_path": "build/packages/arch/vnc-build.txt",
-      "sha256": "1d0d28a63ff73c4ae00a8378785f26a0aaa042d00846f087b7e41b0adce18037",
-      "mode": "100644"
-    },
-    {
-      "path": "build/packages/arch/x11-build.txt",
-      "upstream_path": "build/packages/arch/x11-build.txt",
-      "sha256": "a2237f01144357bc8dd711ae3e905bf321393f4c85b974d8ea4460189d52cc1c",
-      "mode": "100644"
-    },
-    {
-      "path": "build/packages/arch/x11-runtime.txt",
-      "upstream_path": "build/packages/arch/x11-runtime.txt",
-      "sha256": "d21aa6a20ed3a34ccba90ba7a8ca4295e4874521a59cf2a0974eb3dcab5f6ee2",
-      "mode": "100644"
-    },
-    {
       "path": "build/packages/debian/input-build.txt",
       "upstream_path": "build/packages/debian/input-build.txt",
       "sha256": "e8ac3ba8b6744ee46a9165480260d33f9262deb163f9f9feabe5dc433e0221ef",
@@ -142,40 +112,10 @@
       "mode": "100644"
     },
     {
-      "path": "build/packages/fedora/input-build.txt",
-      "upstream_path": "build/packages/fedora/input-build.txt",
-      "sha256": "9023af782dd8d8c98a6e725dc159c236a5805670ec000df163e9920af1de9586",
-      "mode": "100644"
-    },
-    {
-      "path": "build/packages/fedora/vnc-build.txt",
-      "upstream_path": "build/packages/fedora/vnc-build.txt",
-      "sha256": "eb56947f5bb5b15327cb852d1082e8a6ea7df23da3f26fb565d6b6f934bcfe4d",
-      "mode": "100644"
-    },
-    {
-      "path": "build/packages/fedora/x11-build.txt",
-      "upstream_path": "build/packages/fedora/x11-build.txt",
-      "sha256": "58d3fc4d6f795ee79ab2291e4a16e50efa512a6a343713d32e72f04aaaa80e9e",
-      "mode": "100644"
-    },
-    {
-      "path": "build/packages/fedora/x11-runtime.txt",
-      "upstream_path": "build/packages/fedora/x11-runtime.txt",
-      "sha256": "643e2096a05d250cea14acbac3a3924665a25c9e3bdd9f889ce7ecb405d60558",
-      "mode": "100644"
-    },
-    {
       "path": "build/tigervnc-viewer",
       "upstream_path": "build/tigervnc-viewer",
       "sha256": "9104d257d798db3296f115f92da3f0e4e532e1e064b618761ce457f862cfdbc3",
       "mode": "100755"
-    },
-    {
-      "path": "build/websockify-requirements.txt",
-      "upstream_path": "build/websockify-requirements.txt",
-      "sha256": "b063d1812dfdb8a5069a3ad60986fdd5fab730fc5e9f711f960f13b14a852cf6",
-      "mode": "100644"
     },
     {
       "path": "tests/rfb.py",
@@ -211,24 +151,6 @@
       "path": "vendor/kde-container/compat/xtest-paced.cpp",
       "upstream_path": "compat/xtest-paced.cpp",
       "sha256": "335ff24c22b4d2b34c246f0f0f31771466c726014c0aa6b88ee7f5f21654a3e8",
-      "mode": "100644"
-    },
-    {
-      "path": "vendor/kde-container/config/kscreenlockerrc",
-      "upstream_path": "config/kscreenlockerrc",
-      "sha256": "efc39c3791bcfa5ba7a1aeaa6843bc3320c81dc1b80d71bfc0b36e2a3f0dee4d",
-      "mode": "100644"
-    },
-    {
-      "path": "vendor/kde-container/config/ksplashrc",
-      "upstream_path": "config/ksplashrc",
-      "sha256": "fe02d91f60d05640b9b44dd185eb5a89fc7394a5c3aa456f639cbf89b4c3747b",
-      "mode": "100644"
-    },
-    {
-      "path": "vendor/kde-container/config/startkderc",
-      "upstream_path": "config/startkderc",
-      "sha256": "a6a10ce97fb2fdcb2ac995efa72bef77e7bb836ce6d6c0fbd5e1cfa7cb4efb51",
       "mode": "100644"
     },
     {

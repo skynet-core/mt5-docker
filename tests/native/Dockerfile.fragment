@@ -1,4 +1,4 @@
-# Append to a generated Dockerfile, whose vnc-build and uv stages are reused.
+# Append to Dockerfile.debian-13, whose vnc-build and uv stages are reused.
 FROM vnc-build AS native-coverage
 SHELL ["/bin/bash", "-e", "-u", "-o", "pipefail", "-c"]
 WORKDIR /source

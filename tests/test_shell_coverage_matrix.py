@@ -60,7 +60,7 @@ class ShellMatrixTests(unittest.TestCase):
             )
             launcher.chmod(0o755)
             if collision:
-                (root / "output/fedora-44").mkdir(parents=True)
+                (root / "output/debian-13").mkdir(parents=True)
 
         return self.run_source(
             ROOT / "tests" / script,
@@ -82,7 +82,7 @@ class ShellMatrixTests(unittest.TestCase):
         result, commands, _, _ = self.run_matrix("matrix.sh")
         self.assertEqual(result.returncode, 0, result.stderr)
         starts = [command for command in commands if command[0] == "launch"]
-        self.assertEqual(len(starts), 32)
+        self.assertEqual(len(starts), 8)
         self.assertEqual(
             {tuple(command[1:]) for command in starts},
             {
@@ -106,7 +106,7 @@ class ShellMatrixTests(unittest.TestCase):
         ):
             with self.subTest(values=values):
                 result, commands, _, _ = self.run_matrix(
-                    "matrix.sh", arguments=("fedora-44",), environment=values
+                    "matrix.sh", arguments=("debian-13",), environment=values
                 )
                 self.assertEqual(result.returncode, 1)
                 if message:
@@ -131,7 +131,7 @@ class ShellMatrixTests(unittest.TestCase):
         result, commands, _, files = self.run_matrix("display-matrix.sh")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(
-            sum(command[:2] == ["docker", "create"] for command in commands), 4
+            sum(command[:2] == ["docker", "create"] for command in commands), 1
         )
         self.assertTrue(
             any(
@@ -140,8 +140,7 @@ class ShellMatrixTests(unittest.TestCase):
                 for command in commands
             )
         )
-        for distro in ("fedora-44", "debian-13", "ubuntu-26.04", "archlinux"):
-            self.assertIn(f"output/{distro}/runner.log", files)
+        self.assertIn("output/debian-13/runner.log", files)
 
     def test_display_failure_paths_retain_logs_and_propagate_exit_status(self):
         for values, message in (
@@ -152,12 +151,12 @@ class ShellMatrixTests(unittest.TestCase):
         ):
             with self.subTest(values=values):
                 result, _, _, files = self.run_matrix(
-                    "display-matrix.sh", arguments=("fedora-44",), environment=values
+                    "display-matrix.sh", arguments=("debian-13",), environment=values
                 )
                 self.assertEqual(result.returncode, 1)
                 if message:
                     self.assertIn(message, result.stderr)
-                self.assertIn("output/fedora-44/runner.log", files)
+                self.assertIn("output/debian-13/runner.log", files)
 
     def test_display_rejects_unknown_images_ambiguous_overrides_and_existing_evidence(
         self,
@@ -165,12 +164,12 @@ class ShellMatrixTests(unittest.TestCase):
         for arguments, values, collision, message in (
             (("unknown",), {}, False, "Unknown distribution"),
             (
-                ("fedora-44", "debian-13"),
+                ("debian-13", "debian-13"),
                 {"IMAGE_TAG": "override"},
                 False,
                 "Select one distribution",
             ),
-            (("fedora-44",), {}, True, "Evidence already exists"),
+            (("debian-13",), {}, True, "Evidence already exists"),
         ):
             with self.subTest(message=message):
                 result, commands, _, _ = self.run_matrix(

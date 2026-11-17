@@ -1,3 +1,0 @@
-qt6-qt5compat
-qt6-qtsensors
-libxkbcommon-x11

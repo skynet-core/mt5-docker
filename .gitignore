@@ -7,3 +7,6 @@ artifacts/
 .envrc
 .vscode/
 expert/
+CMakeCache.txt
+CMakeFiles/
+.cmake/

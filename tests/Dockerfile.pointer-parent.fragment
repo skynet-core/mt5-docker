@@ -1,5 +1,3 @@
-# Append to Dockerfile.archlinux; this stage is only a decorated test display.
-FROM runtime-test AS pointer-parent
-RUN pacman -Syu --noconfirm --needed breeze \
-    && rm -rf /var/cache/pacman/pkg/*
-COPY --from=vnc-build /out/root/ /
+# Append to Dockerfile.debian-13; the test host needs decorations and cursor capture.
+FROM ghcr.io/skynet-core/kde-container:fedora-44@sha256:04990721df17a831fdc32e7c9b89fe9e6a0a74630b037e7b2aa90af30a491923 AS pointer-parent
+COPY --from=fixture-build /build/plasma-ui-fixture /usr/local/bin/plasma-ui-fixture

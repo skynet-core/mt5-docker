@@ -209,18 +209,6 @@ class ShellBuildTests(unittest.TestCase):
 
         for distro, phase, expected in (
             (
-                "fedora",
-                "desktop",
-                [
-                    "dnf",
-                    "install",
-                    "-y",
-                    "--setopt=install_weak_deps=False",
-                    "package-one",
-                    "package-two",
-                ],
-            ),
-            (
                 "debian",
                 "wine",
                 [
@@ -233,37 +221,13 @@ class ShellBuildTests(unittest.TestCase):
                 ],
             ),
             (
-                "ubuntu",
+                "debian",
                 "desktop",
                 [
                     "apt-get",
                     "install",
                     "-y",
                     "--no-install-recommends",
-                    "package-one",
-                    "package-two",
-                ],
-            ),
-            (
-                "arch",
-                "desktop",
-                [
-                    "pacman",
-                    "-Syu",
-                    "--noconfirm",
-                    "--needed",
-                    "package-one",
-                    "package-two",
-                ],
-            ),
-            (
-                "arch",
-                "wine",
-                [
-                    "pacman",
-                    "-Syu",
-                    "--noconfirm",
-                    "--needed",
                     "package-one",
                     "package-two",
                 ],
@@ -282,30 +246,18 @@ class ShellBuildTests(unittest.TestCase):
                         ("/build-support", "support"),
                     ),
                     before=(
-                        'dnf() { record dnf "$@"; }\n'
                         'apt-get() { record apt-get "$@"; }\n'
                         'dpkg() { record dpkg "$@"; }\n'
-                        'pacman() { record pacman "$@"; }\n'
-                        'uv() { record uv "$@"; }\n'
-                        'ln() { record ln "$@"; }\n'
                         'rm() { record rm "$@"; }\n'
-                        'command() { if [[ $* == "-v wineserver" ]]; then return 0; else builtin command "$@"; fi; }\n'
                     ),
                 )
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertIn(expected, commands)
-                if distro in ("debian", "ubuntu"):
-                    self.assertIn(["apt-get", "update"], commands)
-                    self.assertEqual(
-                        ["dpkg", "--add-architecture", "i386"] in commands,
-                        phase == "wine",
-                    )
-                if distro == "arch":
-                    self.assertIn(["pacman", "-Scc", "--noconfirm"], commands)
-                    self.assertEqual(
-                        any(command[0] == "uv" for command in commands),
-                        phase == "desktop",
-                    )
+                self.assertIn(["apt-get", "update"], commands)
+                self.assertEqual(
+                    ["dpkg", "--add-architecture", "i386"] in commands,
+                    phase == "wine",
+                )
 
     def test_unsupported_distribution_aborts_without_running_any_package_manager(self):
         def setup(root):
@@ -325,37 +277,6 @@ class ShellBuildTests(unittest.TestCase):
         self.assertEqual(result.returncode, 1)
         self.assertIn("Unsupported distribution", result.stderr)
         self.assertEqual(commands, [])
-
-    def test_missing_wineserver_is_repaired_from_a_private_candidate(self):
-        def setup(root):
-            (root / "os-release").write_text("ID=ubuntu\n")
-            (root / "support/packages").mkdir(parents=True)
-            (root / "support/packages/wine.txt").write_text("wine\n")
-            candidate = root / "candidate"
-            candidate.touch(mode=0o755)
-
-        result, commands, _, _ = self.run_source(
-            ROOT / "build/install-packages",
-            arguments=("wine",),
-            setup=setup,
-            replacements=(
-                ("/etc/os-release", "os-release"),
-                ("/build-support", "support"),
-                ("/usr/bin/wineserver-stable", "candidate"),
-            ),
-            before=(
-                'apt-get() { record apt-get "$@"; }\n'
-                'dpkg() { record dpkg "$@"; }\n'
-                'rm() { record rm "$@"; }\n'
-                'ln() { record ln "$@"; touch "$TEST_ROOT/wineserver-found"; }\n'
-                'command() { if [[ $* == "-v wineserver" ]]; then [[ -e $TEST_ROOT/wineserver-found ]]; else builtin command "$@"; fi; }\n'
-            ),
-        )
-        self.assertEqual(result.returncode, 0, result.stderr)
-        links = [command for command in commands if command[0] == "ln"]
-        self.assertEqual(len(links), 1)
-        self.assertTrue(links[0][2].endswith("/candidate"))
-        self.assertEqual(links[0][-1], "/usr/local/bin/wineserver")
 
     def test_desktop_user_creation_preserves_ubuntu_home_and_rejects_conflicts(self):
         for group, owner in (
@@ -448,7 +369,6 @@ class ShellBuildTests(unittest.TestCase):
 
         for distro, codename, expected_arch in (
             ("debian", "trixie", "amd64 i386"),
-            ("ubuntu", "resolute", "amd64"),
             ("debian", "unknown", None),
         ):
             with self.subTest(distro=distro, codename=codename):

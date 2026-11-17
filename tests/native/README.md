@@ -32,7 +32,7 @@ the verified KPipeWire 6.8.2, 6.7.5 and 6.3.90 private ABIs; other modern versio
 an explicit source review. The callback test runs on an isolated offscreen Qt
 platform without a compositor, PipeWire service or user display.
 
-Append `Dockerfile.fragment` to a generated Dockerfile and build/load its
+Append `Dockerfile.fragment` to `Dockerfile.debian-13` and build/load its
 `native-coverage` target. The fragment reuses `vnc-build` and the pinned `uv`
 stage and installs locked Python dev dependencies only in that test image.
 Its entrypoint creates a private Xvfb and exports `NATIVE_TEST_DISPLAY` for every
@@ -44,11 +44,13 @@ missing reports. Production image dependencies and targets are unchanged.
 
 ```sh
 mkdir -p artifacts/coverage/native
-cat Dockerfile.fedora-44 tests/native/Dockerfile.fragment > artifacts/coverage/native/Dockerfile
+cat Dockerfile.debian-13 tests/native/Dockerfile.fragment > artifacts/coverage/native/Dockerfile
 docker buildx build --load --target native-coverage \
   -f artifacts/coverage/native/Dockerfile -t mt5-native-coverage .
-docker run --rm -v "$PWD/artifacts/coverage/native:/coverage" mt5-native-coverage
+docker run --rm --init -v "$PWD/artifacts/coverage/native:/coverage" mt5-native-coverage
 ```
+
+`--init` keeps `xvfb-run` below PID 1 so Xvfb delivers its readiness signal.
 
 Local equivalent requires those development packages, Xvfb and `xvfb-run`, the
 pinned fresh KRFB source and its `vnc-build` development dependencies, plus a fresh

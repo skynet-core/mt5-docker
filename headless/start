@@ -1,5 +1,5 @@
 #!/bin/bash
-set -eu
+set -euo pipefail
 
 if [ ! -f /config.ini ] || [ ! -r /config.ini ]; then
     echo 'Mount a readable MT5 configuration at /config.ini.' >&2
@@ -26,6 +26,7 @@ esac
 if [ ! -f "$settings" ]; then
     mkdir -p "$(dirname "$settings")"
     # shortcut: MT5 treats this invalid key as no native authentication; revisit if its format changes.
+    # Seed both shared sections so MT5 does not generate an incompatible IDE key.
     printf '[MCP.MetaEditor]\nEnable=1\nEndpoint=http://127.0.0.1:22345/mcp\nApiKey=x\n\n[MCP.MetaTrader]\nEnable=1\nEndpoint=http://127.0.0.1:22346/mcp\nApiKey=x\n' |
         iconv -f UTF-8 -t UTF-16 > "$settings.tmp"
     mv "$settings.tmp" "$settings"

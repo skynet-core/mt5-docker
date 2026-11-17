@@ -5,7 +5,6 @@ set -euo pipefail
 source /etc/os-release
 case "$ID:$VERSION_CODENAME" in
 debian:trixie) repository=debian; architectures='amd64 i386' ;;
-ubuntu:resolute) repository=ubuntu; architectures=amd64 ;;
 *) printf 'Unsupported WineHQ target: %s:%s\n' "$ID" "$VERSION_CODENAME" >&2; exit 1 ;;
 esac
 

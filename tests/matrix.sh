@@ -36,7 +36,11 @@ cleanup() {
 }
 trap cleanup EXIT
 distros=("$@")
-if [[ ${#distros[@]} == 0 ]]; then distros=(fedora-44 debian-13 ubuntu-26.04 archlinux); fi
+if [[ ${#distros[@]} == 0 ]]; then distros=(debian-13); fi
+if [[ ${#distros[@]} != 1 || ${distros[0]} != debian-13 ]]; then
+	printf 'Only debian-13 is supported\n' >&2
+	exit 2
+fi
 for distro in "${distros[@]}"; do
 	volume="mt5-check-$run_id-$distro"
 	for backend in wayland x11; do
@@ -44,7 +48,7 @@ for distro in "${distros[@]}"; do
 			case_name="$distro-$backend-$mode"
 			container="mt5-check-$case_name"
 			printf '\nValidating %s\n' "$case_name"
-			if ! IMAGE_TAG="mt5:$distro" CONTAINER_NAME="$container" MT5_VOLUME="$volume" \
+			if ! IMAGE_TAG="${IMAGE_TAG:-mt5:$distro}" CONTAINER_NAME="$container" MT5_VOLUME="$volume" \
 				DISPLAY_BACKEND="$backend" DISPLAY_MODE="$mode" \
 				MT5_MCP_PORT=0 MT5_NATIVE_MCP_PORT=0 MT5_EDITOR_MCP_PORT=0 \
 				VNC_PORT=0 WEB_PORT=0 VNC_PASSWORD=testpass \
@@ -60,7 +64,7 @@ for distro in "${distros[@]}"; do
 			done
 			port=$(docker port "$container" 8000/tcp | sed 's/.*://')
 			validation_args=()
-			if [[ $backend == wayland && ${KWIN_VARIANT:-source} == source && ( $distro == debian-13 || $distro == ubuntu-26.04 ) ]]; then
+			if [[ $backend == wayland ]]; then
 				validation_args+=(--kwin-version 6.8.2)
 			fi
 			if ! uv run --locked python tests/validate.py --container "$container" --case "$case_name" \

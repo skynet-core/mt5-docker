@@ -12,6 +12,5 @@ client and the shared root build helpers/package manifests to the same commit.
 The offline provenance test rejects source or executable-mode drift. Future
 generic fixes belong upstream before this snapshot and ledger are refreshed.
 
-MT5 retains its Wine package installer, desktop package subsets, image
-generator and build/test integration. The generator consumes the upstream
-KWin build/selection constants; WineHQ and product packaging stay here.
+MT5 retains its Wine package installer, Debian desktop package subset and
+two-image build/test integration. WineHQ and product packaging stay here.

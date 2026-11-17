@@ -23,14 +23,20 @@ response = os.fdopen(os.dup(1), 'wb')
 os.dup2(2, 1)
 sys.stdout = sys.stderr
 from mt5_mcp import mcp_tools
+from numpy import generic
 from pydantic_core import to_jsonable_python
+
+def numpy_scalar(value):
+    if isinstance(value, generic):
+        return value.item()
+    raise TypeError(f'Unsupported MCP result type: {type(value).__name__}')
 
 while header := sys.stdin.buffer.read(4):
     try:
         size = int.from_bytes(header, 'big')
         request = json.loads(sys.stdin.buffer.read(size))
         result = getattr(mcp_tools, request['name'])(**request['arguments'])
-        message = {'result': to_jsonable_python(result)}
+        message = {'result': to_jsonable_python(result, fallback=numpy_scalar)}
     except Exception as error:
         message = {'error': str(error)}
     data = json.dumps(message).encode('utf-8')

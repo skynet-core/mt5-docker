@@ -42,11 +42,9 @@ GPU_LOADER.exec_module(GPU)
 class RenderingPolicyTests(unittest.TestCase):
     def test_mt5_images_request_maximization_for_normal_windows(self):
         root = Path(__file__).resolve().parents[1]
-        for distro in ("fedora-44", "debian-13", "ubuntu-26.04", "archlinux"):
-            with self.subTest(distro=distro):
-                recipe = (root / f"Dockerfile.{distro}").read_text()
-                self.assertIn("TARGET_APP=/usr/local/bin/mt5-launch", recipe)
-                self.assertIn("TARGET_APP_WINDOW_MODE=maximized", recipe)
+        recipe = (root / "Dockerfile.debian-13").read_text()
+        self.assertIn("TARGET_APP=/usr/local/bin/mt5-launch", recipe)
+        self.assertIn("TARGET_APP_WINDOW_MODE=maximized", recipe)
 
     def test_window_policy_is_generic_and_applies_only_to_normal_windows(self):
         for mode in (None, "fullscreen", "maximized"):

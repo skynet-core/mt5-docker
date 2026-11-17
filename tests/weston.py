@@ -161,6 +161,6 @@ def main(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--parent-image", default="mt5:weston-test")
-    parser.add_argument("--image", default="mt5:runtime-test-fedora-44")
+    parser.add_argument("--image", default="mt5:runtime-test-debian-13")
     parser.add_argument("--output", default="artifacts/weston")
     main(parser.parse_args())

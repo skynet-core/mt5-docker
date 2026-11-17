@@ -55,7 +55,7 @@ class BrokerMatrixTests(unittest.TestCase):
                         if key not in ("PLASMA_UID", "PLASMA_GID")
                     }
                     subprocess.run(
-                        ["/bin/bash", str(root / "tests/matrix.sh"), "fedora-44"],
+                        ["/bin/bash", str(root / "tests/matrix.sh"), "debian-13"],
                         env={
                             **environment,
                             **overrides,

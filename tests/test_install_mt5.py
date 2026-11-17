@@ -18,27 +18,22 @@ class InstallerRecoveryTests(unittest.TestCase):
         failures,
         failed_status=124,
         payload_during_failure=False,
-        wine_version="wine-11.20",
         mt5_status=1,
         missing_executable="",
         import_status=0,
         delayed_display=False,
-        wow64=False,
     ):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             prefix = root / "prefix"
             script = root / "install-mt5"
             (root / "tmp").mkdir()
-            if wow64:
-                (root / "wow64").mkdir()
             copy_shell(
                 SOURCE,
                 script,
                 (
                     ("/tmp", str(root / "tmp")),
                     ("/home/plasma/.wine", str(prefix)),
-                    ("/usr/lib64/wine-wow64", str(root / "wow64")),
                 ),
             )
             environment = root / "commands.sh"
@@ -58,15 +53,12 @@ sha256sum() { return 0; }
 unzip() { return 0; }
 uv() { return 0; }
 chown() { return 0; }
-cabextract() { record cabextract "$@"; }
 rm() { return 0; }
 timeout() { shift; "$@"; }
 runuser() { shift 3; "$@"; }
 wineserver() { record wineserver "$@"; }
 wine() {
     record wine "$@"
-    if [[ -n ${WINEARCH:-} ]]; then record arch "$WINEARCH"; fi
-    if [[ $1 == --version ]]; then printf '%s\n' "$TEST_WINE_VERSION"; fi
     if [[ $1 == */webview2.exe ]]; then
         local count=0
         if [[ -f $TEST_COUNT ]]; then count=$(< "$TEST_COUNT"); fi
@@ -104,7 +96,6 @@ find() {
                     "TEST_FAILURES": str(failures),
                     "TEST_FAILED_STATUS": str(failed_status),
                     "TEST_PAYLOAD_ON_FAILURE": str(int(payload_during_failure)),
-                    "TEST_WINE_VERSION": wine_version,
                     "TEST_MT5_STATUS": str(mt5_status),
                     "TEST_MISSING_EXECUTABLE": missing_executable,
                     "TEST_IMPORT_STATUS": str(import_status),
@@ -172,20 +163,10 @@ find() {
             any(command[1].endswith("/mt5setup.exe") for command in commands)
         )
 
-    def test_wine10_installs_native_ucrt_and_waits_for_x11(self):
-        result, commands = self.run_installer(
-            0, wine_version="wine-10.0.1", delayed_display=True, wow64=True
-        )
+    def test_installer_waits_for_x11(self):
+        result, commands = self.run_installer(0, delayed_display=True)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(sum(command[0] == "cabextract" for command in commands), 2)
         self.assertIn(["sleep", "0.25"], commands)
-        self.assertIn(["arch", "wow64"], commands)
-        self.assertTrue(
-            any(
-                "ucrtbase" in command and "native,builtin" in command
-                for command in commands
-            )
-        )
 
     def test_mt5_installer_payload_and_windows_import_failures_stay_fatal(self):
         for options, status, message in (

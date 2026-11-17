@@ -11,3 +11,6 @@ tests/*
 **/__pycache__
 expert
 .ruff_cache/
+**/CMakeCache.txt
+**/CMakeFiles
+**/.cmake

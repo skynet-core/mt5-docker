@@ -132,13 +132,22 @@ class PythonEntrypointTests(unittest.TestCase):
             package.mkdir()
             (package / "__init__.py").touch()
             (package / "mcp_tools.py").write_text(
-                "import ctypes, os, threading, time\n"
+                "import ctypes, os, pathlib, threading, time\n"
+                "import numpy as np\n"
+                "from pydantic import BaseModel\n"
+                "class QueryResult(BaseModel):\n"
+                "    data: list[dict]\n"
                 "def mt5_query(operation='terminal_info'):\n"
-                "    if operation == 'hold': time.sleep(0.6)\n"
+                "    if operation == 'hold':\n"
+                "        pathlib.Path(os.environ['MT5_TEST_STARTED']).touch()\n"
+                "        while not pathlib.Path(os.environ['MT5_TEST_RELEASE']).exists(): time.sleep(0.01)\n"
                 "    if operation == 'native_hold': ctypes.PyDLL(None).sleep(1)\n"
                 "    if operation == 'crash': os._exit(17)\n"
                 "    if operation == 'fail': raise ValueError('synthetic failure')\n"
                 "    if operation == 'large': return {'text': 'ü' * 150000}\n"
+                "    if operation == 'unsupported': return object()\n"
+                "    if operation == 'rates': return QueryResult(data=[{'time': np.int64(1700000000), "
+                "'close': np.float32(1.25), 'tick_volume': np.uint64(2**63+1), 'valid': np.bool_(True)}])\n"
                 "    print('tool output does not corrupt the protocol', flush=True)\n"
                 "    return {'operation': operation, 'pid': os.getpid(), 'thread': threading.get_ident()}\n"
                 "mt5_analyze = mt5_query\n"
@@ -146,7 +155,11 @@ class PythonEntrypointTests(unittest.TestCase):
             )
             with (
                 patch.dict(sys.modules, {"mt5_mcp.mcp_server": module}),
-                patch.dict(os.environ, {"PYTHONPATH": directory}),
+                patch.dict(os.environ, {
+                    "PYTHONPATH": directory,
+                    "MT5_TEST_STARTED": str(Path(directory) / "started"),
+                    "MT5_TEST_RELEASE": str(Path(directory) / "release"),
+                }),
             ):
                 exec(compile(program, "<mt5-mcp-program>", "exec"), {})
         factory.assert_called_once_with(rate_limit_per_minute=0)
@@ -170,6 +183,12 @@ class PythonEntrypointTests(unittest.TestCase):
             self.assertNotEqual(results[0]["pid"], os.getpid())
             self.assertEqual(len({result["thread"] for result in results}), 1)
             self.assertEqual((await tools[0]("large"))["text"], "ü" * 150000)
+            self.assertEqual(await tools[0]("rates"), {"data": [{
+                "time": 1700000000, "close": 1.25,
+                "tick_volume": 2**63 + 1, "valid": True,
+            }]})
+            with self.assertRaisesRegex(RuntimeError, "Unsupported MCP result type"):
+                await tools[0]("unsupported")
             with self.assertRaisesRegex(RuntimeError, "synthetic failure"):
                 await tools[0]("fail")
             self.assertEqual((await tools[0]("recovered"))["operation"], "recovered")
@@ -183,15 +202,25 @@ class PythonEntrypointTests(unittest.TestCase):
         async def scenario(server):
             tools = [call.args[0].fn for call in server.add_tool.call_args_list]
             first = asyncio.create_task(tools[0]("hold"))
-            await asyncio.sleep(0.1)
+            async with asyncio.timeout(10):
+                while not Path(os.environ["MT5_TEST_STARTED"]).exists():
+                    await asyncio.sleep(0.01)
             first.cancel()
             with self.assertRaises(asyncio.CancelledError):
                 await first
             for tool in tools:
                 with self.assertRaisesRegex(RuntimeError, "busy"):
                     await tool("another")
-            await asyncio.sleep(0.8)
-            self.assertEqual((await tools[0]("recovered"))["operation"], "recovered")
+            Path(os.environ["MT5_TEST_RELEASE"]).touch()
+            async with asyncio.timeout(10):
+                while True:
+                    try:
+                        result = await tools[0]("recovered")
+                        break
+                    except RuntimeError as error:
+                        self.assertIn("MT5 tools are busy", str(error))
+                        await asyncio.sleep(0.01)
+            self.assertEqual(result["operation"], "recovered")
 
         self._exec_mcp_program(scenario)
 
@@ -207,110 +236,6 @@ class PythonEntrypointTests(unittest.TestCase):
             self.assertGreaterEqual(beats, 10)
 
         self._exec_mcp_program(scenario)
-
-
-class DockerfileRenderingTests(unittest.TestCase):
-    def test_all_generated_variants_match_their_committed_dockerfile(self):
-        generator = load("build/render-dockerfiles.py")
-        template = (ROOT / "Dockerfile.fedora-44").read_text()
-        self.assertEqual(template.count("FROM desktop-packages AS x11-build"), 1)
-        self.assertIn("COPY build/packages/fedora/x11-build.txt", template)
-        self.assertIn("RUN touch /etc/plasma/opengl-software-capture", template)
-        for distro, family in generator.DISTROS.items():
-            with self.subTest(distro=distro):
-                result = generator.render(template, distro, family)
-                self.assertEqual(result, (ROOT / f"Dockerfile.{distro}").read_text())
-                self.assertNotIn("build/packages/fedora/", result)
-                self.assertIn("test -x /usr/bin/kwin_wayland", result)
-                self.assertIn("test -x /usr/bin/kwin_x11", result)
-                self.assertIn('ctypes.CDLL("libGLESv2.so.2")', result)
-                if family == "ubuntu":
-                    self.assertIn("build/packages/debian/input-build.txt", result)
-                    self.assertIn("build/packages/ubuntu/desktop.txt", result)
-                if family == "arch":
-                    self.assertEqual(
-                        result.count("FROM desktop-packages AS x11-build"), 1
-                    )
-                    self.assertIn("COPY build/packages/arch/x11-build.txt", result)
-                    self.assertIn("COPY --from=x11-build /out/root/ /", result)
-                    self.assertEqual(
-                        result.count("RUN touch /etc/plasma/opengl-software-capture"), 1
-                    )
-                    self.assertNotIn("ARG KWIN_VARIANT=", result)
-                else:
-                    self.assertNotIn("AS x11-build", result)
-                    self.assertNotIn("COPY --from=x11-build", result)
-                    self.assertNotIn(f"build/packages/{family}/x11-", result)
-                    self.assertNotIn(
-                        "RUN touch /etc/plasma/opengl-software-capture", result
-                    )
-                    self.assertIn("ARG KWIN_VARIANT=source", result)
-                    self.assertIn("FROM kwin-${KWIN_VARIANT} AS kwin-selected", result)
-
-        for recipe in (
-            template,
-            *(generator.render(template, d, f) for d, f in generator.DISTROS.items()),
-        ):
-            self.assertIn("ARG XWAYLAND_FRONTEND_VERSION=24.1.14", recipe)
-            self.assertIn(
-                "ARG XWAYLAND_FRONTEND_SHA256=4eb6b98d678299a4b96138d886345b294130695760345ef84596225a8224078a",
-                recipe,
-            )
-            self.assertIn(
-                "COPY build/tigervnc-viewer build/xwayland-frontend /build-support/",
-                recipe,
-            )
-            self.assertIn(
-                "COPY vendor/kde-container/patches/xwayland-pointer-precision.patch vendor/kde-container/patches/xwayland-rootful-ready.patch /tmp/",
-                recipe,
-            )
-            self.assertIn(
-                "COPY vendor/kde-container/test/xwayland-pointer-unit.c vendor/kde-container/test/xwayland-pointer-unit.py vendor/kde-container/test/xwayland-rootful-ready-unit.c /build-support/",
-                recipe,
-            )
-            self.assertLess(
-                recipe.index("&& /build-support/xwayland-frontend"),
-                recipe.index("&& /build-support/collect-artifacts vnc"),
-            )
-            self.assertIn("COPY --from=vnc-build /out/root/ /", recipe)
-            self.assertIn("ldd /usr/local/libexec/plasma-xwayland", recipe)
-
-    def test_check_reports_missing_or_stale_files_without_rewriting(self):
-        generator = load("build/render-dockerfiles.py")
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            (root / "Dockerfile.fedora-44").write_text(
-                (ROOT / "Dockerfile.fedora-44").read_text()
-            )
-            stale = root / "Dockerfile.ubuntu-26.04"
-            stale.write_text("keep stale bytes")
-            with (
-                patch.object(generator, "ROOT", root),
-                patch.object(sys, "argv", ["render", "--check"]),
-            ):
-                with self.assertRaisesRegex(
-                    SystemExit,
-                    "Regenerate Dockerfiles:.*debian-13.*ubuntu-26.04.*archlinux",
-                ):
-                    generator.main()
-                self.assertEqual(stale.read_text(), "keep stale bytes")
-                self.assertFalse((root / "Dockerfile.debian-13").exists())
-            with (
-                patch.object(generator, "ROOT", root),
-                patch.object(sys, "argv", ["render"]),
-            ):
-                generator.main()
-            with (
-                patch.object(generator, "ROOT", root),
-                patch.object(sys, "argv", ["render", "--check"]),
-            ):
-                generator.main()
-
-    def test_check_entrypoint_is_read_only(self):
-        with patch.object(sys, "argv", ["render", "--check"]):
-            runpy.run_path(
-                str(ROOT / "build/render-dockerfiles.py"), run_name="__main__"
-            )
 
 
 class LintEntrypointTests(unittest.TestCase):

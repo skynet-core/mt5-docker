@@ -1,18 +1,15 @@
 # Private KWin 6.8.2 build
 
-Debian 13 and Ubuntu 26.04 keep their original systemd bases and package
-repositories. Their packaged Qt/KF versions do not meet [KWin 6.8.2's build
+Debian 13 keeps its original systemd base and package
+repositories. Its packaged Qt/KF versions do not meet [KWin 6.8.2's build
 requirements](https://github.com/KDE/kwin/blob/v6.8.2/CMakeLists.txt). The
 `kwin-*` Docker stages build its required stack into `/opt/kwin-6.8.2` using
-Debian 13's older glibc. With the default `KWIN_VARIANT=source`, both final
-images copy the same runtime payload. The `TARGET_APP` kiosk session activates
+Debian 13's glibc. The KDE image copies only the runtime payload.
+The `TARGET_APP` kiosk session activates
 it; applications keep their distro Qt environment.
 
-`--build-arg KWIN_VARIANT=distro` selects an empty overlay stage instead. BuildKit
-skips the entire Qt/KF/KWin source dependency graph and the image uses its distro
-compositor. Hosted CI and local acceptance use the source variant. Debian's older
-NVIDIA remote compositor uses its software fallback in the distro variant; the
-source 6.8.2 variant keeps normal GPU selection.
+This single build keeps normal GPU selection in NVIDIA remote modes. There is
+no alternate distro-Wayland variant. X11 uses Debian's packaged KWin compositor.
 
 | Component | Version |
 | --- | --- |
@@ -36,14 +33,14 @@ and GPU drivers remain runtime dependencies.
 Qt builds only qtbase, qtsvg, qtshadertools, qtdeclarative, qttools,
 qt5compat and qtpositioning. In Qt 6.11, qtbase supplies WaylandClient and its
 scanner; a separate QtWaylandCompositor build is unnecessary. Qt uses bundled
-JPEG and omits ICU to avoid Debian-only library SONAMEs on Ubuntu. KDE builds
+JPEG and omits ICU. KDE builds
 the Frameworks required by KWin and KNightTime, plus PolkitQt. The KWin kiosk
 build omits configuration modules, desktop overview, notifications, tabbox,
 screen locker, activities, decorations and shortcut configuration.
 
 The collector strips development headers, static libraries, SDK metadata and
-documentation. A private copy of `libdisplay-info.so.2` preserves its ABI on
-Ubuntu. Source license files are retained. KWin's file capability is removed
+documentation. The payload includes `libdisplay-info.so.2` and source license
+files. KWin's file capability is removed
 so its loader honors the private library paths in nested and remote modes.
 
 Only the compositor and its cache builder use the private libraries, plugins
@@ -63,12 +60,6 @@ docker build --target kwin-artifacts -f Dockerfile.debian-13 .
 
 Each source phase has its own cached stage. The final `mt5` image copies only
 the collected runtime tree; source archives, compilers and build tools stay
-in the builder stages.
-
-Fedora and Arch retain their distribution Wayland compositor and build the
-separate, namespaced KWin-X11 6.7.5 release with `build/arch-kwin-x11`. Arch no
-longer packages X11 KWin, while Fedora's KWin 6.8 conflicts with its older X11
-RPM. The shared builder verifies its pinned archive, derives `/usr/lib` or
-`/usr/lib64` from the distro Qt SDK, and rejects output that replaces Wayland
-KWin or its library. Only runtime artifacts and required runtime packages reach
-the final image. Debian and Ubuntu continue using their packaged X11 compositor.
+in the builder stages. CI retains these compiled stages in GHCR so later builds
+pull their artifacts instead of rebuilding Qt and KWin. See
+[CI cache policy](../.github/README.md#reusing-compiled-dependencies).

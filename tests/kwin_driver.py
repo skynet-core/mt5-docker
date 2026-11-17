@@ -121,6 +121,8 @@ class KWinDriver:
             "QT_QPA_PLATFORM=" + ("wayland" if wayland else "offscreen"),
             "QT_QPA_PLATFORMTHEME=generic",
             *(["WAYLAND_DISPLAY=wayland-0"] if wayland else []),
+            "timeout",
+            "30",
             *arguments,
         )
 
